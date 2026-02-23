@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { NavHeader } from "@/components/layout/nav-header";
+import { DatabaseService, StrategyDeployment, Position, Trade } from "@/lib/supabase";
 
 type Environment = 'paper' | 'live';
 type StrategyStatus = 'stopped' | 'running' | 'paused' | 'error';
@@ -24,7 +25,7 @@ interface LiveMetrics {
   turnover: number;
 }
 
-interface Position {
+interface BinancePosition {
   asset: string;
   qty: number;
   entryPrice: number;
@@ -96,7 +97,9 @@ export default function ExecutionPage() {
     turnover: 0
   });
 
-  const [positions, setPositions] = useState<Position[]>([]);
+  const [positions, setPositions] = useState<BinancePosition[]>([]);
+  const [dbPositions, setDbPositions] = useState<Position[]>([]);
+  const [activeDeployments, setActiveDeployments] = useState<StrategyDeployment[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [logEvents, setLogEvents] = useState<LogEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -115,7 +118,7 @@ export default function ExecutionPage() {
     rebalance_frequency: 5
   });
 
-  // Load credentials from localStorage on mount
+  // Load credentials from localStorage on mount and fetch database data
   useEffect(() => {
     const stored = localStorage.getItem('binance_paper_credentials');
     if (stored) {
@@ -128,7 +131,53 @@ export default function ExecutionPage() {
         addLog('ERROR', 'Failed to load stored credentials', 'warning');
       }
     }
+
+    // Load active deployments from database
+    loadActiveDeployments();
   }, []);
+
+  // Load active deployments from database
+  const loadActiveDeployments = async () => {
+    try {
+      const { data, error } = await DatabaseService.getActiveDeployments();
+      if (error) {
+        addLog('ERROR', `Failed to load deployments: ${error.message}`, 'critical');
+        return;
+      }
+
+      setActiveDeployments(data || []);
+
+      // If we have active deployments, update UI state
+      if (data && data.length > 0) {
+        const deployment = data[0]; // Get first active deployment
+        setDeploymentProcessId(deployment.process_id);
+        setStrategyStatus('running');
+        setEnvironment(deployment.trading_mode);
+        addLog('DEPLOYMENT', `Found active deployment: ${deployment.strategy_name}`, 'info');
+
+        // Load positions for this deployment
+        loadPositionsForDeployment(deployment.id);
+      }
+    } catch (error) {
+      addLog('ERROR', `Database error: ${error}`, 'critical');
+    }
+  };
+
+  // Load positions from database for a deployment
+  const loadPositionsForDeployment = async (deploymentId: string) => {
+    try {
+      const { data, error } = await DatabaseService.getOpenPositions(deploymentId);
+      if (error) {
+        addLog('ERROR', `Failed to load positions: ${error.message}`, 'warning');
+        return;
+      }
+
+      setDbPositions(data || []);
+      addLog('STRATEGY', `Loaded ${data?.length || 0} positions from database`, 'info');
+    } catch (error) {
+      addLog('ERROR', `Position load error: ${error}`, 'warning');
+    }
+  };
 
   // Test API connection whenever credentials change
   useEffect(() => {
@@ -247,11 +296,17 @@ export default function ExecutionPage() {
     }
   };
 
-  // Fetch data on interval
+  // Fetch data on interval and update database positions
   useEffect(() => {
     if (apiConnected) {
       fetchExecutionData();
-      const interval = setInterval(fetchExecutionData, 2000);
+      const interval = setInterval(() => {
+        fetchExecutionData();
+        // Refresh database data every 30 seconds
+        if (Date.now() % 30000 < 2000) {
+          loadActiveDeployments();
+        }
+      }, 2000);
       return () => clearInterval(interval);
     }
   }, [apiConnected, environment]);
@@ -293,6 +348,9 @@ export default function ExecutionPage() {
         setShowDeployModal(false);
         addLog('DEPLOYMENT', `Strategy deployed successfully (PID: ${result.processId})`, 'info');
         addLog('STRATEGY', `Running ${strategyParams.strategy_name} in ${strategyParams.trading_mode.toUpperCase()} mode`, 'info');
+
+        // Refresh deployments from database
+        setTimeout(() => loadActiveDeployments(), 1000);
       } else {
         addLog('ERROR', `Deployment failed: ${result.error}`, 'critical');
       }
@@ -322,6 +380,10 @@ export default function ExecutionPage() {
         setStrategyStatus('stopped');
         setDeploymentProcessId(null);
         addLog('STRATEGY', 'Strategy stopped successfully', 'info');
+
+        // Refresh deployments from database
+        setTimeout(() => loadActiveDeployments(), 1000);
+        setDbPositions([]); // Clear positions
       } else {
         addLog('ERROR', `Failed to stop strategy: ${result.error}`, 'critical');
       }
@@ -736,11 +798,15 @@ export default function ExecutionPage() {
             <div className="space-y-2">
               <div className="flex justify-between">
                 <span className="text-sm text-neutral-600">Strategy:</span>
-                <span className="text-sm font-medium">MeanReversion_ETHBTC</span>
+                <span className="text-sm font-medium">
+                  {activeDeployments.length > 0 ? activeDeployments[0].strategy_name : 'No Strategy Running'}
+                </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-sm text-neutral-600">Version:</span>
-                <span className="text-sm font-mono">v0.3.2 (a4f2c89)</span>
+                <span className="text-sm text-neutral-600">Process ID:</span>
+                <span className="text-sm font-mono">
+                  {deploymentProcessId || 'None'}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-neutral-600">Capital:</span>
@@ -887,9 +953,30 @@ export default function ExecutionPage() {
                   </tr>
                 </thead>
                 <tbody>
+                  {/* Show database positions first, then Binance positions */}
+                  {dbPositions.length > 0 ? dbPositions.map((position, idx) => (
+                    <tr key={`db-${idx}`} className="border-b border-neutral-100 bg-blue-50">
+                      <td className="py-2 text-sm font-medium">
+                        {position.symbol_1}/{position.symbol_2}
+                        <div className="text-xs text-blue-600">Strategy Position</div>
+                      </td>
+                      <td className="py-2 text-sm text-right">{position.position_size}</td>
+                      <td className="py-2 text-sm text-right">${position.entry_price_1.toFixed(2)}</td>
+                      <td className="py-2 text-sm text-right">-</td>
+                      <td className={`py-2 text-sm text-right font-medium ${position.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        ${position.realized_pnl.toFixed(2)}
+                      </td>
+                      <td className="py-2 text-sm text-right">-</td>
+                    </tr>
+                  )) : null}
+
+                  {/* Binance API positions */}
                   {positions.length > 0 ? positions.map((position, idx) => (
-                    <tr key={idx} className="border-b border-neutral-100">
-                      <td className="py-2 text-sm font-medium">{position.asset}</td>
+                    <tr key={`binance-${idx}`} className="border-b border-neutral-100">
+                      <td className="py-2 text-sm font-medium">
+                        {position.asset}
+                        <div className="text-xs text-neutral-500">Binance Position</div>
+                      </td>
                       <td className="py-2 text-sm text-right">{position.qty}</td>
                       <td className="py-2 text-sm text-right">${position.entryPrice.toFixed(2)}</td>
                       <td className="py-2 text-sm text-right">${position.currentPrice.toFixed(2)}</td>
@@ -898,7 +985,10 @@ export default function ExecutionPage() {
                       </td>
                       <td className="py-2 text-sm text-right">${position.margin.toFixed(2)}</td>
                     </tr>
-                  )) : (
+                  )) : null}
+
+                  {/* Show message if no positions */}
+                  {dbPositions.length === 0 && positions.length === 0 && (
                     <tr>
                       <td colSpan={6} className="py-4 text-center text-sm text-neutral-400">
                         {apiConnected ? 'No open positions' : 'Connect API to view positions'}

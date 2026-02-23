@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { createClient } from '@supabase/supabase-js';
 
 interface StrategyConfig {
   strategy_name: string;
@@ -22,6 +23,11 @@ interface StrategyConfig {
 
 // Store active strategy processes
 const activeStrategies = new Map<string, any>();
+
+// Initialize Supabase client
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
 export async function POST(request: Request) {
   try {
@@ -116,6 +122,47 @@ export async function POST(request: Request) {
     logStream.write(`[${new Date().toISOString()}] Process ID: ${processId}\n`);
     logStream.write(`[${new Date().toISOString()}] System PID: ${strategyProcess.pid}\n`);
 
+    // Save strategy deployment to database
+    try {
+      const { data: deployment, error: dbError } = await supabase
+        .from('strategy_deployments')
+        .insert([{
+          process_id: processId,
+          strategy_name: config.strategy_name,
+          trading_mode: config.trading_mode,
+          status: 'running',
+          symbol_1: config.symbol_1,
+          symbol_2: config.symbol_2,
+          entry_z_score: config.entry_z_score,
+          exit_z_score: config.exit_z_score,
+          position_size: config.position_size,
+          max_positions: config.max_positions,
+          system_pid: strategyProcess.pid,
+          config_file_path: configPath,
+          log_file_path: logPath
+        }])
+        .select()
+
+      if (dbError) {
+        console.error('Database save error:', dbError)
+        // Continue anyway - don't fail deployment for DB issues
+      } else {
+        console.log('Strategy saved to database:', deployment?.[0]?.id)
+      }
+
+      // Log deployment to database
+      await supabase.from('system_logs').insert([{
+        deployment_id: deployment?.[0]?.id,
+        log_level: 'info',
+        log_type: 'deployment',
+        message: `Strategy ${config.strategy_name} deployed in ${config.trading_mode} mode (PID: ${strategyProcess.pid})`
+      }])
+
+    } catch (dbError) {
+      console.error('Database error:', dbError)
+      // Don't fail the deployment for database issues
+    }
+
     // Don't wait for the subprocess (let it run in background)
     strategyProcess.unref();
 
@@ -138,19 +185,36 @@ export async function POST(request: Request) {
 }
 
 export async function GET() {
-  // Get list of active strategies
-  const strategies = Array.from(activeStrategies.entries()).map(([id, data]) => ({
-    processId: id,
-    pid: data.pid,
-    strategy_name: data.config.strategy_name,
-    trading_mode: data.config.trading_mode,
-    symbols: `${data.config.symbol_1}/${data.config.symbol_2}`,
-    startTime: data.startTime,
-    status: data.process.killed ? 'stopped' : 'running'
-  }));
+  try {
+    // Get list of active strategies from database
+    const { data: strategies, error } = await supabase
+      .from('strategy_deployments')
+      .select('*')
+      .order('deployed_at', { ascending: false })
 
-  return NextResponse.json({
-    strategies,
-    count: strategies.length
-  });
+    if (error) {
+      console.error('Database fetch error:', error)
+      return NextResponse.json({ error: 'Failed to fetch strategies' }, { status: 500 })
+    }
+
+    const formattedStrategies = strategies?.map(strategy => ({
+      processId: strategy.process_id,
+      pid: strategy.system_pid,
+      strategy_name: strategy.strategy_name,
+      trading_mode: strategy.trading_mode,
+      symbols: `${strategy.symbol_1}/${strategy.symbol_2}`,
+      startTime: strategy.deployed_at,
+      status: strategy.status,
+      totalTrades: strategy.total_trades,
+      totalPnl: strategy.total_pnl
+    })) || []
+
+    return NextResponse.json({
+      strategies: formattedStrategies,
+      count: formattedStrategies.length
+    });
+  } catch (error) {
+    console.error('Error fetching strategies:', error)
+    return NextResponse.json({ error: 'Failed to fetch strategies' }, { status: 500 })
+  }
 }

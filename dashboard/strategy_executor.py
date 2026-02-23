@@ -23,16 +23,141 @@ try:
     import hmac
     import hashlib
     from urllib.parse import urlencode
+    from supabase import create_client, Client
 except ImportError:
     print("Installing required packages...")
-    os.system("pip3 install requests pandas numpy")
+    os.system("pip3 install requests pandas numpy supabase")
     import requests
     import hmac
     import hashlib
     from urllib.parse import urlencode
+    from supabase import create_client, Client
 
 import pandas as pd
 import numpy as np
+
+class DatabaseService:
+    """Supabase database service for logging strategy data"""
+
+    def __init__(self):
+        # Get environment variables or use defaults
+        self.supabase_url = os.getenv('NEXT_PUBLIC_SUPABASE_URL', 'https://hfmcbyqdibxdbimwkcwi.supabase.co')
+        self.supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY',
+                                      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhmbWNieXFkaWJ4ZGJpbXdrY3dpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MTgzMDU3MCwiZXhwIjoyMDg3NDA2NTcwfQ.lAAU3d_wcZVOPMhFVZ80RizUJturvnKtXj2hX5nX8o0')
+
+        try:
+            self.client: Client = create_client(self.supabase_url, self.supabase_key)
+            logger.info("Connected to Supabase database")
+        except Exception as e:
+            logger.error(f"Failed to connect to database: {e}")
+            self.client = None
+
+    def get_deployment_by_process_id(self, process_id: str):
+        """Get deployment record by process ID"""
+        if not self.client:
+            return None
+        try:
+            result = self.client.table('strategy_deployments').select('*').eq('process_id', process_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Database error getting deployment: {e}")
+            return None
+
+    def create_position(self, deployment_id: str, position_data: dict):
+        """Create a new position record"""
+        if not self.client:
+            return None
+        try:
+            result = self.client.table('positions').insert([{
+                'deployment_id': deployment_id,
+                'position_id': position_data['id'],
+                'symbol_1': position_data['symbol1'],
+                'symbol_2': position_data['symbol2'],
+                'direction': position_data['direction'],
+                'status': 'open',
+                'entry_price_1': position_data['entry_price1'],
+                'entry_price_2': position_data['entry_price2'],
+                'entry_z_score': position_data['entry_z_score'],
+                'position_size': position_data['size'],
+                'entry_time': position_data['entry_time'].isoformat(),
+                'realized_pnl': 0.0,
+                'net_pnl': 0.0
+            }]).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Database error creating position: {e}")
+            return None
+
+    def close_position(self, position_id: str, exit_data: dict):
+        """Close a position record"""
+        if not self.client:
+            return None
+        try:
+            result = self.client.table('positions').update({
+                'status': 'closed',
+                'exit_price_1': exit_data['exit_price1'],
+                'exit_price_2': exit_data['exit_price2'],
+                'exit_z_score': exit_data.get('exit_z_score', 0),
+                'exit_time': exit_data['exit_time'].isoformat(),
+                'exit_reason': exit_data['reason'],
+                'realized_pnl': exit_data['pnl'],
+                'net_pnl': exit_data['pnl']
+            }).eq('position_id', position_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Database error closing position: {e}")
+            return None
+
+    def create_trade(self, deployment_id: str, position_id: str, trade_data: dict):
+        """Create a trade record"""
+        if not self.client:
+            return None
+        try:
+            result = self.client.table('trades').insert([{
+                'deployment_id': deployment_id,
+                'position_id': position_id,
+                'symbol': trade_data['symbol'],
+                'side': trade_data['side'],
+                'quantity': trade_data['quantity'],
+                'price': trade_data['price'],
+                'commission': trade_data.get('commission', 0.0),
+                'execution_time': trade_data['execution_time'].isoformat(),
+                'realized_pnl': trade_data.get('pnl', 0.0)
+            }]).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Database error creating trade: {e}")
+            return None
+
+    def log_system_event(self, deployment_id: str, log_level: str, log_type: str, message: str):
+        """Log a system event"""
+        if not self.client:
+            return None
+        try:
+            result = self.client.table('system_logs').insert([{
+                'deployment_id': deployment_id,
+                'log_level': log_level,
+                'log_type': log_type,
+                'message': message
+            }]).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Database error logging event: {e}")
+            return None
+
+    def update_deployment_metrics(self, deployment_id: str, total_trades: int, total_pnl: float):
+        """Update deployment performance metrics"""
+        if not self.client:
+            return None
+        try:
+            result = self.client.table('strategy_deployments').update({
+                'total_trades': total_trades,
+                'total_pnl': total_pnl
+            }).eq('id', deployment_id).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error(f"Database error updating metrics: {e}")
+            return None
 
 # Configure logging
 logging.basicConfig(
@@ -130,8 +255,9 @@ class BinanceClient:
 class StatArbStrategy:
     """Statistical Arbitrage Strategy Executor"""
 
-    def __init__(self, config: StrategyConfig):
+    def __init__(self, config: StrategyConfig, process_id: str = None):
         self.config = config
+        self.process_id = process_id
         self.status = StrategyStatus.STOPPED
         self.client = None
         self.positions = {}
@@ -140,8 +266,21 @@ class StatArbStrategy:
         self.last_rebalance = None
         self.running = False
 
+        # Initialize database service
+        self.db = DatabaseService()
+        self.deployment_id = None
+
         # Initialize Binance client
         self._init_client()
+
+        # Get deployment info from database if process_id provided
+        if self.process_id and self.db.client:
+            deployment = self.db.get_deployment_by_process_id(self.process_id)
+            if deployment:
+                self.deployment_id = deployment['id']
+                logger.info(f"Found deployment in database: {self.deployment_id}")
+            else:
+                logger.warning(f"No deployment found for process_id: {self.process_id}")
 
     def _init_client(self):
         """Initialize Binance client"""
@@ -286,16 +425,28 @@ class StatArbStrategy:
                 logger.warning("Live trading execution not fully implemented for safety")
 
             # Record position (paper trading or after live execution)
+            entry_time = datetime.now()
             self.positions[position_id] = {
+                'id': position_id,
                 'direction': direction,
                 'entry_price1': price1,
                 'entry_price2': price2,
                 'entry_z_score': z_score,
                 'size': self.config.position_size,
-                'entry_time': datetime.now(),
+                'entry_time': entry_time,
                 'symbol1': self.config.symbol_1,
                 'symbol2': self.config.symbol_2
             }
+
+            # Log position to database
+            if self.deployment_id:
+                self.db.create_position(self.deployment_id, self.positions[position_id])
+                self.db.log_system_event(
+                    self.deployment_id,
+                    'info',
+                    'position',
+                    f"Entered {direction} position {position_id} at z-score {z_score:.2f}"
+                )
 
             self.trades_today += 1
             logger.info(f"Entered {direction} position: {position_id} at z-score {z_score:.2f}")
@@ -322,6 +473,31 @@ class StatArbStrategy:
                 # Close actual orders
                 logger.warning("Live trading execution not fully implemented for safety")
 
+            # Log position closure to database
+            if self.deployment_id:
+                exit_time = datetime.now()
+                # Get current z-score for exit logging
+                current_z_score = self.calculate_z_score(price1, price2)
+
+                self.db.close_position(position_id, {
+                    'exit_price1': price1,
+                    'exit_price2': price2,
+                    'exit_z_score': current_z_score,
+                    'exit_time': exit_time,
+                    'reason': reason,
+                    'pnl': pnl
+                })
+
+                self.db.log_system_event(
+                    self.deployment_id,
+                    'info',
+                    'position',
+                    f"Exited position {position_id} - {reason}, P&L: ${pnl:.2f}"
+                )
+
+                # Update deployment metrics
+                self.db.update_deployment_metrics(self.deployment_id, self.trades_today, self.pnl)
+
             # Remove position
             del self.positions[position_id]
 
@@ -346,6 +522,16 @@ class StatArbStrategy:
 
                     # Log status
                     logger.info(f"Status: {len(self.positions)} positions | P&L: ${self.pnl:.2f} | Trades today: {self.trades_today}")
+
+                    # Update metrics in database periodically
+                    if self.deployment_id:
+                        self.db.update_deployment_metrics(self.deployment_id, self.trades_today, self.pnl)
+                        self.db.log_system_event(
+                            self.deployment_id,
+                            'info',
+                            'status',
+                            f"Strategy running: {len(self.positions)} positions, P&L: ${self.pnl:.2f}, Trades: {self.trades_today}"
+                        )
 
                 # Wait for next iteration
                 await asyncio.sleep(self.config.rebalance_frequency * 60)
@@ -403,6 +589,7 @@ def main():
     parser = argparse.ArgumentParser(description='Statistical Arbitrage Strategy Executor')
     parser.add_argument('--config', type=str, required=True, help='Path to strategy config file')
     parser.add_argument('--mode', type=str, choices=['paper', 'live'], default='paper', help='Trading mode')
+    parser.add_argument('--process-id', type=str, help='Process ID for database tracking')
     args = parser.parse_args()
 
     # Load configuration
@@ -410,8 +597,17 @@ def main():
     if args.mode:
         config.trading_mode = TradingMode(args.mode)
 
+    # Extract process_id from config file path if not provided
+    process_id = args.process_id
+    if not process_id and args.config:
+        # Extract from config filename (e.g., strategy_123456.json -> strategy_123456)
+        import os
+        config_name = os.path.basename(args.config)
+        if config_name.endswith('.json'):
+            process_id = config_name[:-5]  # Remove .json extension
+
     # Create strategy
-    strategy = StatArbStrategy(config)
+    strategy = StatArbStrategy(config, process_id)
 
     # Handle shutdown signals
     def signal_handler(signum, frame):
