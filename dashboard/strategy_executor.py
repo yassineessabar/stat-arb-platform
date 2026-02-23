@@ -359,16 +359,25 @@ class StatArbStrategy:
             # Calculate z-score
             z_score = self.calculate_z_score(price1, price2)
 
-            logger.info(f"Current z-score: {z_score:.2f} | Prices: {self.config.symbol_1}={price1:.2f}, {self.config.symbol_2}={price2:.2f}")
+            logger.info(f"SIGNAL CHECK - Current z-score: {z_score:.2f} | Prices: {self.config.symbol_1}={price1:.2f}, {self.config.symbol_2}={price2:.2f}")
+            logger.info(f"ENTRY CRITERIA - Z-score threshold: {self.config.entry_z_score}, Current positions: {len(self.positions)}/{self.config.max_positions}")
 
             # Check entry conditions
             if abs(z_score) > self.config.entry_z_score and len(self.positions) < self.config.max_positions:
                 if z_score > self.config.entry_z_score:
                     # Spread is too high - short symbol1, long symbol2
+                    logger.info(f"✅ ENTRY SIGNAL TRIGGERED - Z-score {z_score:.2f} > {self.config.entry_z_score} - Going SHORT")
                     self._enter_position('SHORT', price1, price2, z_score)
                 elif z_score < -self.config.entry_z_score:
                     # Spread is too low - long symbol1, short symbol2
+                    logger.info(f"✅ ENTRY SIGNAL TRIGGERED - Z-score {z_score:.2f} < -{self.config.entry_z_score} - Going LONG")
                     self._enter_position('LONG', price1, price2, z_score)
+            else:
+                # Log why entry conditions weren't met
+                if abs(z_score) <= self.config.entry_z_score:
+                    logger.info(f"❌ NO ENTRY - Z-score {z_score:.2f} below threshold {self.config.entry_z_score}")
+                if len(self.positions) >= self.config.max_positions:
+                    logger.info(f"❌ NO ENTRY - Max positions reached {len(self.positions)}/{self.config.max_positions}")
 
         except Exception as e:
             logger.error(f"Error checking entry signals: {e}")
@@ -377,7 +386,10 @@ class StatArbStrategy:
         """Check for exit signals"""
         try:
             if not self.positions:
+                logger.info("EXIT CHECK - No open positions to check")
                 return
+
+            logger.info(f"EXIT CHECK - Checking {len(self.positions)} open position(s)")
 
             # Get current prices
             ticker1 = self.client.get_ticker(symbol=self.config.symbol_1)
@@ -389,8 +401,12 @@ class StatArbStrategy:
             # Calculate current z-score
             z_score = self.calculate_z_score(price1, price2)
 
+            logger.info(f"EXIT CHECK - Current z-score: {z_score:.2f} | Exit threshold: {self.config.exit_z_score} | Stop loss: {self.config.stop_loss_z_score}")
+
             # Check each position
             for position_id, position in list(self.positions.items()):
+                logger.info(f"CHECKING POSITION {position_id} ({position['direction']}) - Entry z-score: {position['entry_z_score']:.2f}")
+
                 # Exit conditions
                 exit_condition = False
                 exit_reason = ""
@@ -399,17 +415,22 @@ class StatArbStrategy:
                 if abs(z_score) < self.config.exit_z_score:
                     exit_condition = True
                     exit_reason = "Mean reversion"
+                    logger.info(f"✅ EXIT SIGNAL - Mean reversion: |{z_score:.2f}| < {self.config.exit_z_score}")
 
                 # Stop loss
                 if position['direction'] == 'LONG' and z_score < -self.config.stop_loss_z_score:
                     exit_condition = True
                     exit_reason = "Stop loss"
+                    logger.info(f"🛑 EXIT SIGNAL - LONG stop loss: {z_score:.2f} < -{self.config.stop_loss_z_score}")
                 elif position['direction'] == 'SHORT' and z_score > self.config.stop_loss_z_score:
                     exit_condition = True
                     exit_reason = "Stop loss"
+                    logger.info(f"🛑 EXIT SIGNAL - SHORT stop loss: {z_score:.2f} > {self.config.stop_loss_z_score}")
 
                 if exit_condition:
                     self._exit_position(position_id, price1, price2, exit_reason)
+                else:
+                    logger.info(f"➤ POSITION HELD - {position_id} - No exit criteria met")
 
         except Exception as e:
             logger.error(f"Error checking exit signals: {e}")
