@@ -1,0 +1,102 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# BINANCE EXCHANGE CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+exchange:
+  name: "binance"
+  environment: "paper"  # paper | live
+
+# API Configuration
+api:
+  base_url:
+    live: "https://fapi.binance.com"
+    testnet: "https://testnet.binancefuture.com"
+
+  endpoints:
+    market_data: "/fapi/v1/klines"
+    account: "/fapi/v2/account"
+    positions: "/fapi/v2/positionRisk"
+    new_order: "/fapi/v1/order"
+    order_status: "/fapi/v1/order"
+    funding_rate: "/fapi/v1/fundingRate"
+
+  rate_limits:
+    requests_per_minute: 1200
+    orders_per_second: 10
+    orders_per_day: 200000
+
+# Trading Configuration
+trading:
+  order_type: "LIMIT"              # LIMIT | MARKET
+  time_in_force: "GTC"             # GTC | IOC | FOK
+  position_side: "BOTH"            # BOTH | LONG | SHORT (for hedge mode)
+
+  execution:
+    max_slippage_bps: 10           # Max 10 bps slippage tolerance
+    order_timeout_seconds: 30      # Cancel order if not filled
+    retry_attempts: 3              # Max retries for failed orders
+    min_order_value_usdt: 5        # Minimum order value
+
+  position_management:
+    hedge_mode: true               # Enable hedge mode for pairs
+    reduce_only: false             # Allow position increases
+    close_position_on_halt: true   # Auto-close on DD halt
+
+# Risk Controls
+risk_controls:
+  max_position_value_usdt: 50000   # Max single position value
+  max_total_exposure_usdt: 200000  # Max total portfolio exposure
+  max_leverage: 6.0                # Max leverage per position
+
+  emergency:
+    kill_switch_dd: 0.20           # Emergency stop at 20% DD
+    max_daily_trades: 100          # Max trades per day
+    min_account_balance: 1000      # Min balance to continue trading
+
+# Fees (Binance Futures VIP 0)
+fees:
+  maker_fee_bps: 2               # 0.02% maker fee
+  taker_fee_bps: 4               # 0.04% taker fee
+  funding_frequency_hours: 8     # Funding every 8 hours
+
+# Paper Trading Simulation
+paper_trading:
+  initial_balance_usdt: 100000   # $100K starting capital
+  simulate_latency_ms: 50        # Simulate 50ms execution latency
+  simulate_slippage: true        # Add realistic slippage
+  simulate_funding: true         # Apply funding costs
+
+  fill_simulation:
+    market_orders: 1.0           # 100% fill rate for market orders
+    limit_orders: 0.95           # 95% fill rate for limit orders
+    partial_fills: true          # Enable partial fills
+
+# Data Sources
+data:
+  primary_source: "binance_api"
+  backup_sources: ["ccxt", "yfinance"]
+
+  intervals:
+    strategy_data: "1d"          # Daily data for strategy
+    live_prices: "1m"            # 1-min data for live execution
+    funding_rates: "8h"          # Funding rate data
+
+  storage:
+    local_cache_hours: 24        # Cache data locally for 24h
+    database_retention_days: 365 # Keep historical data for 1 year
+
+# Monitoring & Alerts
+monitoring:
+  heartbeat_interval_seconds: 30
+  position_check_interval_seconds: 60
+  balance_check_interval_seconds: 300
+
+  alerts:
+    telegram_enabled: false
+    email_enabled: false
+    slack_enabled: false
+
+    triggers:
+      large_drawdown_pct: 0.10   # Alert on 10% DD
+      position_deviation_pct: 0.05  # Alert on 5% position drift
+      execution_failure: true    # Alert on order failures

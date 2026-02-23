@@ -1,0 +1,83 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# CRYPTO UNIVERSE — Binance Perpetual Futures
+# ═══════════════════════════════════════════════════════════════════════════════
+
+universe:
+  description: "Top 25 crypto assets by market cap and liquidity"
+  last_updated: "2025-02-10"
+
+  symbols:
+    # Core crypto (high liquidity)
+    - "BTCUSDT"
+    - "ETHUSDT"
+    - "BNBUSDT"
+    - "SOLUSDT"
+    - "XRPUSDT"
+    - "ADAUSDT"
+    - "AVAXUSDT"
+    - "DOGEUSDT"
+
+    # Layer 1s & major alts
+    - "DOTUSDT"
+    - "MATICUSDT"
+    - "LINKUSDT"
+    - "LTCUSDT"
+    - "BCHUSDT"
+    - "ETCUSDT"
+    - "XLMUSDT"
+    - "VETUSDT"
+    - "TRXUSDT"
+
+    # DeFi & newer large caps
+    - "UNIUSDT"
+    - "AAVEUSDT"
+    - "MKRUSDT"
+    - "COMPUSDT"
+    - "SUSHIUSDT"
+    - "CRVUSDT"
+    - "YFIUSDT"
+    - "1INCHUSDT"
+
+# Pre-selected pairs from notebook validation
+validated_pairs:
+  # These pairs have been validated in the notebook with strong cointegration
+  tier1:  # ADF p-value < 0.05
+    - ["BTCUSDT", "ETHUSDT"]
+    - ["ADAUSDT", "DOTUSDT"]
+    - ["LINKUSDT", "AVAXUSDT"]
+    - ["UNIUSDT", "AAVEUSDT"]
+    - ["SOLUSDT", "AVAXUSDT"]
+
+  tier2:  # ADF p-value 0.05-0.10
+    - ["BNBUSDT", "ADAUSDT"]
+    - ["MATICUSDT", "DOTUSDT"]
+    - ["LINKUSDT", "UNIUSDT"]
+    - ["VETUSDT", "TRXUSDT"]
+    - ["LTCUSDT", "BCHUSDT"]
+
+# Binance symbol specifications
+binance_specs:
+  base_asset_suffix: "USDT"
+  contract_type: "PERPETUAL"
+  min_notional: 5.0              # Minimum position size in USDT
+  tick_size: 0.01                # Price increment
+  step_size: 0.001               # Quantity increment
+
+# Data requirements
+data_requirements:
+  min_history_days: 600          # Need 600+ days for cointegration analysis
+  required_fields:
+    - "open"
+    - "high"
+    - "low"
+    - "close"
+    - "volume"
+  timeframes:
+    primary: "1d"                # Daily bars for strategy
+    monitoring: ["4h", "1h"]     # For live monitoring
+
+# Liquidity filters
+liquidity:
+  min_daily_volume_usdt: 10000000    # $10M daily volume minimum
+  min_avg_spread_bps: 5              # Max 5 bps average spread
+  max_price_impact_1k: 0.001         # Max 0.1% impact for $1K trade

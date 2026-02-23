@@ -1,0 +1,123 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# MULTI-PAIR STAT-ARB v6 — FROZEN PARAMETERS
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# WARNING: These parameters are LOCKED from live notebook results
+# Sharpe: 3.98 | Annual Return: 63.7% | Max DD: -4.6%
+#
+# DO NOT MODIFY without full re-validation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+strategy:
+  name: "multi_pair_stat_arb_v6"
+  version: "6.0.0"
+  description: "Return maximiser with 20% vol target, aggressive entries, tiered pairs"
+
+# ── Universe & Data ──
+data:
+  trading_days_year: 365
+  start_date: "2022-01-01"
+
+# ── Pair Selection — LEVER 2: relaxed thresholds for more pairs ──
+pair_selection:
+  min_adf_pvalue: 0.10           # v6: relaxed from 0.05 (admit marginal pairs)
+  min_correlation: 0.40          # v6: relaxed from 0.45
+  min_half_life: 2               # v6: relaxed from 3
+  max_half_life: 120             # v6: extended from 100
+  max_pairs: 30                  # v6: up from 25
+
+# ── Tiered pair quality ──
+tier_thresholds:
+  tier1_adf_threshold: 0.05      # v6: strong pairs (full weight)
+  tier2_adf_threshold: 0.10      # v6: marginal pairs (half weight)
+  tier2_weight_discount: 0.5     # v6: marginal pairs run at 50% weight
+
+# ── Rolling cointegration ──
+cointegration:
+  rolling_window: 180
+  kill_pvalue: 0.20              # v6: more lenient (was 0.05)
+  revive_pvalue: 0.08            # v6: new parameter
+  check_frequency: 20            # v6: check more often (was 30)
+
+# ── Kalman Filter ──
+kalman:
+  delta: 0.00001                 # 1e-5
+  ve: 0.001                      # 1e-3
+
+# ── Signal Generation — LEVER 2: lower entry threshold ──
+signals:
+  z_entry: 1.0                   # v6: from 1.5 (much more trades)
+  z_exit_long: 0.20              # v6: from 0.35 (exit closer to mean)
+  z_exit_short: 0.10             # v6: from 0.15
+  z_stop: 3.5                    # v6: from 4.0 (tighter stop)
+  min_holding: 2                 # v6: from 3 (faster turnover)
+
+  lookback_multiplier: 2.0
+  min_lookback: 12               # v6: from 15 (shorter lookback min)
+  max_lookback: 80
+
+# ── Graduated sizing ──
+sizing:
+  z_size_min: 0.8                # v6: from 1.0 (allow undersizing near entry)
+  z_size_max: 2.5
+  z_size_cap_z: 3.0              # v6: from 3.5
+
+# ── Conviction weighting ──
+conviction:
+  lookback: 70                   # v6: from 90 (faster adaptation)
+  high_mult: 2.5                 # v6: from 2.0 (lean harder into winners)
+  low_mult: 0.2                  # v6: from 0.3 (cut losers harder)
+  high_threshold: 0.7            # v6: from 0.8
+  low_threshold: -0.2            # v6: from 0.0 (tolerate slightly negative)
+  rebalance_freq: 20             # v6: from 30
+
+# ── Funding proxy ──
+funding:
+  momentum_window: 5             # v6: from 7 (faster)
+  extreme_quantile: 0.82         # v6: from 0.85 (trigger more often)
+  boost: 1.5                     # v6: from 1.4
+
+# ── Weekend boost ──
+weekend:
+  boost: 1.25                    # v6: from 1.2
+
+# ── Regime detection ──
+regime:
+  corr_lookback: 40
+  corr_threshold: 0.30           # v6: from 0.35 (more permissive)
+  vol_lookback_short: 15
+  vol_lookback_long: 45
+  vol_ratio_threshold: 0.25      # v6: relaxed from 0.3
+
+# ── LEVER 1: Portfolio vol targeting ──
+portfolio:
+  target_vol: 0.20               # v6: 20% annual target (was 12%)
+  vol_window: 45                 # v6: shorter vol window (was 60)
+
+# ── LEVER 3: Risk management ──
+risk:
+  max_pair_weight: 0.25          # v6: from 0.20
+  max_portfolio_leverage: 6.0    # v6: from 4.5
+  drawdown_halt: 0.15            # v6: from 0.12 (wider halt)
+  pair_drawdown_kill: 0.08       # v6: from 0.06 (less aggressive)
+  vol_floor_quantile: 0.05       # v6: from 0.10 (lower floor)
+
+# ── Transaction costs ──
+costs:
+  fee_bps: 0.0004               # 4 bps per trade
+  slippage_bps: 0.0003          # 3 bps slippage
+  impact_coeff: 0.10            # market impact
+  funding_daily: 0.0001         # 1 bp daily funding
+
+# ── Walk-forward validation ──
+walk_forward:
+  train_days: 270
+  test_days: 90
+  step_days: 90
+
+# ── Performance targets (for monitoring) ──
+targets:
+  min_sharpe: 1.0
+  min_annual_return: 0.25
+  max_drawdown: 0.15
+  min_profit_factor: 1.0

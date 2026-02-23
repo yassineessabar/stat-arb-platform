@@ -1,0 +1,97 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# RISK MANAGEMENT — Hard Limits & Circuit Breakers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Portfolio Level Limits
+portfolio:
+  max_total_exposure_usdt: 200000       # Max total notional exposure
+  max_leverage: 6.0                     # Max portfolio leverage
+  max_pairs: 30                         # Max number of active pairs
+
+  drawdown_limits:
+    warning_level: 0.08                 # 8% DD warning
+    halt_level: 0.15                    # 15% DD halt (from v6 params)
+    emergency_stop: 0.20                # 20% DD emergency liquidation
+
+  correlation_limits:
+    max_avg_correlation: 0.8            # Max average pair correlation
+    correlation_spike_threshold: 0.95   # Kill switch for correlation spike
+
+# Pair Level Limits
+pair:
+  max_position_value_usdt: 50000        # Max single pair exposure
+  max_pair_weight: 0.25                 # Max 25% of portfolio per pair (v6)
+  pair_drawdown_kill: 0.08              # Kill pair at 8% DD (v6)
+
+  z_score_limits:
+    max_entry_z: 4.0                    # Never enter beyond |4.0|
+    emergency_exit_z: 5.0               # Force close beyond |5.0|
+
+  holding_limits:
+    max_holding_days: 30                # Force close after 30 days
+    min_holding_periods: 2              # Min hold from v6
+
+# Execution Limits
+execution:
+  max_orders_per_minute: 10             # Rate limit orders
+  max_daily_trades: 100                 # Daily trade limit
+  min_order_value_usdt: 5               # Min order size
+  max_order_value_usdt: 25000           # Max single order size
+
+  slippage_limits:
+    max_slippage_bps: 15                # Max 15 bps slippage
+    slippage_halt_bps: 25               # Halt trading on 25 bps+ slippage
+
+# Time-based Limits
+temporal:
+  trading_hours:
+    start: "00:00"                      # 24/7 crypto trading
+    end: "23:59"
+    timezone: "UTC"
+
+  cool_down_periods:
+    after_halt_minutes: 30              # 30 min cooldown after halt
+    after_emergency_hours: 24           # 24 hour cooldown after emergency
+    pair_restart_hours: 4               # 4 hour cooldown for killed pairs
+
+# Market Condition Limits
+market:
+  volatility_limits:
+    max_portfolio_vol: 0.30             # Max 30% annualized vol
+    vol_spike_threshold: 2.0            # Reduce size on 2x vol spike
+
+  liquidity_limits:
+    min_daily_volume_usdt: 5000000      # Min $5M daily volume
+    max_spread_bps: 20                  # Max 20 bps spread
+
+# Account Protection
+account:
+  min_balance_usdt: 1000                # Min balance to continue
+  margin_call_level: 0.85               # 85% margin utilization warning
+  liquidation_buffer: 0.75              # Stop trading at 75% margin util
+
+  balance_checks:
+    check_frequency_minutes: 5          # Check balance every 5 minutes
+    alert_threshold_pct: 0.10           # Alert on 10% balance drop
+
+# Emergency Protocols
+emergency:
+  triggers:
+    market_crash_threshold: -0.20       # -20% market move in 1 day
+    exchange_downtime_minutes: 60       # 1 hour exchange downtime
+    api_error_rate: 0.10                # 10% API error rate
+
+  actions:
+    close_all_positions: true           # Auto-close on emergency
+    disable_new_trades: true            # Stop new position opens
+    send_alerts: true                   # Send emergency notifications
+
+# Performance Monitoring
+performance:
+  benchmark_limits:
+    min_sharpe_trailing_90d: 0.5        # Min 0.5 Sharpe over 90 days
+    max_tracking_error: 0.15            # Max 15% tracking error vs expected
+
+  divergence_limits:
+    live_vs_backtest_diff: 0.05         # Max 5% performance divergence
+    expected_vs_actual_vol: 0.25        # Max 25% vol difference
