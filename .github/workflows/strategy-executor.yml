@@ -21,9 +21,9 @@ on:
         required: false
         default: '10000'
 
-  # Scheduled execution - runs every 5 minutes
-  schedule:
-    - cron: '*/5 * * * *'  # Every 5 minutes, 24/7
+  # Scheduled execution disabled - GitHub Actions blocked by Binance
+  # schedule:
+  #   - cron: '*/5 * * * *'  # Every 5 minutes, 24/7
 
   # Also run on push to main for updates
   push:
@@ -139,8 +139,18 @@ jobs:
 
           echo "✅ Configuration created for ${{ github.event.inputs.trading_mode || 'paper' }} trading"
 
+      - name: Check API Access
+        run: |
+          # Check if we can access Binance from this location
+          echo "🌍 Testing API access from GitHub Actions..."
+          curl -s "https://api.binance.com/api/v3/ping" || echo "❌ Binance not accessible from this location"
+          curl -s "https://testnet.binance.vision/api/v3/ping" || echo "❌ Testnet not accessible from this location"
+          echo "GitHub Actions runs from US servers where Binance is blocked."
+          echo "For 24/7 trading, deploy to a VPS in a supported country."
+
       - name: Run Strategy for One Cycle
         timeout-minutes: 10  # Prevent infinite runs
+        if: false  # Disabled due to geo-restrictions
         run: |
           # Run the strategy for one rebalance cycle
           python3 << 'PYTHON_SCRIPT'
