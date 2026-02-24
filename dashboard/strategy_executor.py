@@ -366,9 +366,9 @@ class V6StrategyExecutor:
         signal_summary = {
             'timestamp': datetime.now().isoformat(),
             'n_pairs': len(signals),
-            'long_signals': sum(1 for s in signals.values() if s > 0),
-            'short_signals': sum(1 for s in signals.values() if s < 0),
-            'neutral': sum(1 for s in signals.values() if s == 0)
+            'long_signals': sum(1 for s in signals.values() if isinstance(s, (int, float)) and s > 0),
+            'short_signals': sum(1 for s in signals.values() if isinstance(s, (int, float)) and s < 0),
+            'neutral': sum(1 for s in signals.values() if isinstance(s, (int, float)) and s == 0)
         }
 
         logger.info(f"📊 SIGNALS SUMMARY: {signal_summary['long_signals']} long, {signal_summary['short_signals']} short, {signal_summary['neutral']} neutral")
