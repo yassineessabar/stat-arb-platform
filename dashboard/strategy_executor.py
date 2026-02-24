@@ -226,7 +226,43 @@ class V6StrategyExecutor:
 
         # Initialize database
         self.db = DatabaseService()
-        self.deployment_id = self.config.get('deployment_id')
+        self.deployment_id = self.config.get('deployment_id', f"vps_{int(time.time())}")
+
+        # Register VPS deployment in database
+        if self.db and self.db.client:
+            vps_info = {
+                'deployment_id': self.deployment_id,
+                'strategy_name': self.config.get('strategy_name', 'StatArb_v6'),
+                'trading_mode': self.config.get('trading_mode', 'paper'),
+                'universe_size': len(self.config.get('universe', [])),
+                'portfolio_value': self.config.get('portfolio_value', 10000),
+                'location': os.getenv('VPS_LOCATION', 'Unknown'),
+                'ip_address': os.getenv('VPS_IP', 'Unknown'),
+                'status': 'active',
+                'process_type': 'vps_direct'
+            }
+            try:
+                self.db.client.table('strategy_deployments').upsert([{
+                    'deployment_id': self.deployment_id,
+                    'strategy_name': vps_info['strategy_name'],
+                    'trading_mode': vps_info['trading_mode'],
+                    'status': 'active',
+                    'config': vps_info,
+                    'created_at': datetime.now().isoformat(),
+                    'updated_at': datetime.now().isoformat()
+                }], on_conflict='deployment_id').execute()
+                logger.info(f"📝 Registered VPS deployment: {self.deployment_id} ({vps_info['location']})")
+            except Exception as e:
+                logger.warning(f"Failed to register VPS deployment: {e}")
+
+        # Enhanced file logging for VPS
+        log_file = f'strategy_{self.deployment_id}_{datetime.now():%Y%m%d}.log'
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        logger.info(f"📄 VPS logs: {log_file}")
 
         # Trading state
         self.running = False

@@ -109,6 +109,7 @@ export default function ExecutionPage() {
   const [strategyLogs, setStrategyLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [showServerDeployModal, setShowServerDeployModal] = useState(false);
+  const [vpsDeployments, setVpsDeployments] = useState<any[]>([]);
 
   const [strategyParams, setStrategyParams] = useState<StrategyParameters>({
     strategy_name: 'StatArb_v6_Multi',
@@ -222,23 +223,42 @@ export default function ExecutionPage() {
     }
 
     try {
-      // First try to get logs from database (preferred)
+      // Try VPS logs first (for VPS deployments)
+      if (processId.startsWith('vps_')) {
+        console.log('📡 Loading VPS logs for deployment:', processId);
+        const vpsResponse = await fetch(`/api/vps/logs?deploymentId=${processId}&limit=50`);
+        const vpsResult = await vpsResponse.json();
+
+        if (vpsResult.success && vpsResult.logs && vpsResult.logs.length > 0) {
+          console.log('📡 VPS logs loaded:', vpsResult.logs.length, 'entries');
+          setStrategyLogs(vpsResult.logs.map((log: any) => ({
+            timestamp: log.timestamp,
+            level: log.level,
+            message: log.message,
+            event_type: log.eventType,
+            details: log.details
+          })));
+          return;
+        }
+      }
+
+      // Try local database logs (for local deployments)
       const dbResponse = await fetch(`/api/strategy/db-logs?processId=${processId}&limit=50`);
       const dbResult = await dbResponse.json();
 
       if (dbResult.success && dbResult.logs && dbResult.logs.length > 0) {
-        console.log('📊 Loading logs from database:', dbResult.logs.length, 'entries');
+        console.log('📊 Database logs loaded:', dbResult.logs.length, 'entries');
         setStrategyLogs(dbResult.logs);
         return;
       }
 
       // Fallback to file-based logs if database logs are not available
-      console.log('📁 Database logs not available, falling back to file-based logs');
+      console.log('📁 Falling back to file-based logs');
       const fileResponse = await fetch(`/api/strategy/logs?processId=${processId}&lines=50`);
       const fileResult = await fileResponse.json();
 
       if (fileResult.success && fileResult.logs) {
-        console.log('📁 Loading logs from files:', fileResult.logs.length, 'entries');
+        console.log('📁 File logs loaded:', fileResult.logs.length, 'entries');
         setStrategyLogs(fileResult.logs);
       } else {
         // Log file might not exist yet for new deployments
