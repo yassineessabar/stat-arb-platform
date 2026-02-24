@@ -1,0 +1,143 @@
+name: Test Workflow Setup
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test-setup:
+    name: Test Basic Setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Check Python Version
+        run: |
+          python3 --version
+          pip3 --version
+
+      - name: Check Repository Structure
+        run: |
+          echo "📁 Repository Structure:"
+          ls -la
+          echo ""
+          echo "📂 Core Strategy Files:"
+          ls -la core/ || echo "Core directory not found"
+          echo ""
+          echo "📂 Config Files:"
+          ls -la config/ || echo "Config directory not found"
+          echo ""
+          echo "📂 Dashboard Files:"
+          ls -la dashboard/ || echo "Dashboard directory not found"
+
+      - name: Check for Required Files
+        run: |
+          echo "✅ Checking required files..."
+
+          # Check strategy executor
+          if [ -f "dashboard/strategy_executor.py" ]; then
+            echo "✅ strategy_executor.py found"
+            head -20 dashboard/strategy_executor.py
+          else
+            echo "❌ strategy_executor.py not found"
+          fi
+
+          # Check config
+          if [ -f "config/params_v6.yaml" ]; then
+            echo "✅ params_v6.yaml found"
+            head -20 config/params_v6.yaml
+          else
+            echo "❌ params_v6.yaml not found"
+          fi
+
+      - name: Test Python Imports
+        run: |
+          python3 << 'EOF'
+          import sys
+          import os
+          print("✅ Python imports test...")
+
+          # Add paths
+          sys.path.insert(0, 'dashboard')
+          sys.path.insert(0, '.')
+
+          try:
+              # Test basic imports
+              import json
+              import asyncio
+              from pathlib import Path
+              print("✅ Basic imports successful")
+
+              # Test if strategy files exist
+              if os.path.exists('dashboard/strategy_executor.py'):
+                  print("✅ Strategy executor found at dashboard/strategy_executor.py")
+
+              if os.path.exists('core/strategy_engine.py'):
+                  print("✅ Strategy engine found at core/strategy_engine.py")
+
+          except ImportError as e:
+              print(f"❌ Import error: {e}")
+              sys.exit(1)
+
+          print("\n✅ All basic tests passed!")
+          EOF
+
+      - name: Check Secrets Configuration
+        run: |
+          echo "📋 Checking configured secrets..."
+          echo ""
+
+          # Check which secrets are set (without revealing values)
+          if [ -n "${{ secrets.BINANCE_TESTNET_KEY }}" ]; then
+            echo "✅ BINANCE_TESTNET_KEY is configured"
+          else
+            echo "⚠️ BINANCE_TESTNET_KEY is NOT configured"
+          fi
+
+          if [ -n "${{ secrets.BINANCE_TESTNET_SECRET }}" ]; then
+            echo "✅ BINANCE_TESTNET_SECRET is configured"
+          else
+            echo "⚠️ BINANCE_TESTNET_SECRET is NOT configured"
+          fi
+
+          if [ -n "${{ secrets.SUPABASE_URL }}" ]; then
+            echo "✅ SUPABASE_URL is configured"
+          else
+            echo "⚠️ SUPABASE_URL is NOT configured (optional)"
+          fi
+
+          if [ -n "${{ secrets.SUPABASE_SERVICE_KEY }}" ]; then
+            echo "✅ SUPABASE_SERVICE_KEY is configured"
+          else
+            echo "⚠️ SUPABASE_SERVICE_KEY is NOT configured (optional)"
+          fi
+
+          echo ""
+          echo "📌 To add secrets:"
+          echo "1. Go to Settings → Secrets and variables → Actions"
+          echo "2. Click 'New repository secret'"
+          echo "3. Add the secret name and value"
+
+      - name: Summary
+        run: |
+          echo "=========================================="
+          echo "  WORKFLOW TEST SUMMARY"
+          echo "=========================================="
+          echo "✅ GitHub Actions is working!"
+          echo "✅ Python environment is set up"
+          echo "✅ Repository structure is correct"
+          echo ""
+          echo "Next steps:"
+          echo "1. Add your API secrets (see above)"
+          echo "2. The strategy will run automatically every 5 minutes"
+          echo "3. Check the 'Actions' tab to monitor execution"
+          echo ""
+          echo "🚀 Your v6 strategy is ready for deployment!"

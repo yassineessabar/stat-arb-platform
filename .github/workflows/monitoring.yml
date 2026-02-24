@@ -43,12 +43,21 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           ALERT_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        if: ${{ secrets.SUPABASE_URL != '' }}
         run: |
           python3 << 'MONITOR_SCRIPT'
           import os
           import json
+          import os
           import pandas as pd
           from datetime import datetime, timedelta
+
+          # Check if secrets are configured
+          if not os.environ.get('SUPABASE_URL'):
+              print("⚠️ Monitoring skipped: SUPABASE_URL not configured")
+              print("Please add secrets to enable monitoring")
+              exit(0)
+
           from supabase import create_client
 
           # Connect to database
@@ -123,6 +132,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        if: ${{ secrets.SUPABASE_URL != '' }}
         run: |
           python3 << 'REPORT_SCRIPT'
           import os
@@ -218,6 +228,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        if: ${{ secrets.SUPABASE_URL != '' }}
         run: |
           python3 << 'HEALTH_CHECK'
           import os

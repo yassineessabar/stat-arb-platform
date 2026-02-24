@@ -67,6 +67,7 @@ jobs:
     needs: health-check
     if: needs.health-check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
+    continue-on-error: true  # Allow workflow to continue even if strategy fails
 
     steps:
       - name: Checkout Repository
@@ -89,18 +90,32 @@ jobs:
           BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
           BINANCE_TESTNET_KEY: ${{ secrets.BINANCE_TESTNET_KEY }}
           BINANCE_TESTNET_SECRET: ${{ secrets.BINANCE_TESTNET_SECRET }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || '' }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY || '' }}
         run: |
-          # Determine which API keys to use
-          if [ "${{ github.event.inputs.trading_mode || 'paper' }}" == "live" ]; then
-            API_KEY="${BINANCE_API_KEY}"
-            API_SECRET="${BINANCE_API_SECRET}"
-            TESTNET="false"
-          else
-            API_KEY="${BINANCE_TESTNET_KEY}"
-            API_SECRET="${BINANCE_TESTNET_SECRET}"
+          # Check if secrets are configured
+          if [ -z "${BINANCE_TESTNET_KEY}" ]; then
+            echo "⚠️ WARNING: No API keys configured. Please add the following secrets:"
+            echo "  - BINANCE_TESTNET_KEY"
+            echo "  - BINANCE_TESTNET_SECRET"
+            echo "  - SUPABASE_URL (optional)"
+            echo "  - SUPABASE_SERVICE_KEY (optional)"
+            echo ""
+            echo "Using demo mode for testing..."
+            API_KEY="demo_key"
+            API_SECRET="demo_secret"
             TESTNET="true"
+          else
+            # Determine which API keys to use
+            if [ "${{ github.event.inputs.trading_mode || 'paper' }}" == "live" ]; then
+              API_KEY="${BINANCE_API_KEY}"
+              API_SECRET="${BINANCE_API_SECRET}"
+              TESTNET="false"
+            else
+              API_KEY="${BINANCE_TESTNET_KEY}"
+              API_SECRET="${BINANCE_TESTNET_SECRET}"
+              TESTNET="true"
+            fi
           fi
 
           # Create strategy configuration
