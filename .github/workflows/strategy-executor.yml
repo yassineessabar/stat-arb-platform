@@ -12,6 +12,14 @@ on:
         options:
           - paper
           - live
+      runner_type:
+        description: 'Runner Location'
+        required: false
+        default: 'ubuntu-latest'
+        type: choice
+        options:
+          - ubuntu-latest
+          - self-hosted
       rebalance_frequency:
         description: 'Rebalance Frequency (minutes)'
         required: false
@@ -66,7 +74,7 @@ jobs:
     name: Execute V6 Strategy
     needs: health-check
     if: needs.health-check.outputs.should_run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.inputs.runner_type || 'ubuntu-latest' }}
     continue-on-error: true  # Allow workflow to continue even if strategy fails
 
     steps:
@@ -141,16 +149,57 @@ jobs:
 
       - name: Check API Access
         run: |
-          # Check if we can access Binance from this location
-          echo "🌍 Testing API access from GitHub Actions..."
-          curl -s "https://api.binance.com/api/v3/ping" || echo "❌ Binance not accessible from this location"
-          curl -s "https://testnet.binance.vision/api/v3/ping" || echo "❌ Testnet not accessible from this location"
-          echo "GitHub Actions runs from US servers where Binance is blocked."
-          echo "For 24/7 trading, deploy to a VPS in a supported country."
+          echo "🌍 Testing API access from runner location..."
+          echo "Runner type: ${{ github.event.inputs.runner_type || 'ubuntu-latest' }}"
+
+          # Check current IP location
+          curl -s "https://ipinfo.io/json" | jq -r '.country + " - " + .city + " (" + .ip + ")"' || echo "Location: Unknown"
+
+          # Test Binance API access
+          echo ""
+          echo "🔌 Testing Binance API endpoints..."
+
+          # Test main API
+          BINANCE_MAIN=$(curl -s "https://api.binance.com/api/v3/ping" 2>/dev/null)
+          if echo "$BINANCE_MAIN" | grep -q '"code":0'; then
+            echo "❌ Binance main API blocked (geo-restriction)"
+          elif echo "$BINANCE_MAIN" | grep -q '{}'; then
+            echo "✅ Binance main API accessible"
+          else
+            echo "⚠️ Binance main API: Unknown response"
+          fi
+
+          # Test testnet
+          BINANCE_TEST=$(curl -s "https://testnet.binance.vision/api/v3/ping" 2>/dev/null)
+          if echo "$BINANCE_TEST" | grep -q '"code":0'; then
+            echo "❌ Binance testnet blocked (geo-restriction)"
+          elif echo "$BINANCE_TEST" | grep -q '{}'; then
+            echo "✅ Binance testnet accessible"
+          else
+            echo "⚠️ Binance testnet: Unknown response"
+          fi
+
+          # Provide guidance based on runner type
+          if [ "${{ github.event.inputs.runner_type || 'ubuntu-latest' }}" = "ubuntu-latest" ]; then
+            echo ""
+            echo "📍 GitHub-hosted runners are in US (Binance blocked)"
+            echo "🔧 Solutions:"
+            echo "  1. Use self-hosted runner in Singapore/EU"
+            echo "  2. Deploy to VPS for 24/7 trading"
+            echo "  3. Use GitLab CI (EU servers)"
+          else
+            echo ""
+            echo "📍 Using self-hosted runner"
+            if echo "$BINANCE_MAIN" | grep -q '{}'; then
+              echo "🚀 Ready for live trading!"
+            else
+              echo "⚠️ Check your VPS location - Binance may be blocked"
+            fi
+          fi
 
       - name: Run Strategy for One Cycle
         timeout-minutes: 10  # Prevent infinite runs
-        if: true  # Enabled for testing signal logging
+        if: github.event.inputs.runner_type == 'self-hosted' || github.event.inputs.trading_mode == 'paper'
         run: |
           # Run the strategy for one rebalance cycle with mock data
           python3 << 'PYTHON_SCRIPT'
