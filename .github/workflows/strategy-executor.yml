@@ -150,14 +150,17 @@ jobs:
 
       - name: Run Strategy for One Cycle
         timeout-minutes: 10  # Prevent infinite runs
-        if: false  # Disabled due to geo-restrictions
+        if: true  # Enabled for testing signal logging
         run: |
-          # Run the strategy for one rebalance cycle
+          # Run the strategy for one rebalance cycle with mock data
           python3 << 'PYTHON_SCRIPT'
           import sys
           import json
           import asyncio
+          import pandas as pd
+          import numpy as np
           from pathlib import Path
+          from datetime import datetime, timedelta
 
           # Add paths
           sys.path.insert(0, 'dashboard')
@@ -173,14 +176,45 @@ jobs:
           # Create executor
           executor = V6StrategyExecutor('strategy_config.json')
 
+          # Mock price data for testing since Binance is blocked
+          print("🔧 Using mock price data for GitHub Actions testing...")
+
+          # Generate realistic mock prices
+          universe = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+          mock_prices = {
+              "BTCUSDT": 63155.60,
+              "ETHUSDT": 1822.66,
+              "BNBUSDT": 425.30,
+              "SOLUSDT": 95.50,
+              "XRPUSDT": 0.55
+          }
+
+          # Create mock price history
+          dates = pd.date_range(
+              start=datetime.now() - timedelta(hours=24),
+              end=datetime.now(),
+              freq='5T'
+          )
+
+          mock_data = {}
+          for symbol in universe:
+              base_price = mock_prices[symbol]
+              # Add realistic price movements
+              returns = np.random.normal(0, 0.001, len(dates))
+              prices = [base_price]
+              for ret in returns[1:]:
+                  prices.append(prices[-1] * (1 + ret))
+              mock_data[symbol] = prices
+
+          executor.price_history = pd.DataFrame(mock_data, index=dates)
+
           async def run_single_cycle():
               """Run a single strategy cycle for GitHub Actions"""
-              print("🚀 Starting single cycle execution...")
+              print("🚀 Starting single cycle execution with mock data...")
 
-              # Fetch initial price data (minimal for GitHub Actions)
-              for i in range(5):
-                  executor.fetch_price_data()
-                  await asyncio.sleep(1)
+              # Initialize pairs with mock data
+              if len(executor.price_history) >= 24:
+                  executor.initialize_pairs()
 
               # Run one strategy cycle
               executor.run_strategy_cycle()

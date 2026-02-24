@@ -294,7 +294,75 @@ class V6StrategyExecutor:
         # Get signals from strategy engine
         signals = self.engine.generate_signals(self.price_history)
 
-        # Log signal analysis
+        # Log detailed signal analysis like the requested format
+        now_str = datetime.now().strftime('%H:%M:%S')
+        logger.info(f"Signal Analysis - {now_str}")
+
+        # Process each pair for detailed logging
+        for pair_name, signal in signals.items():
+            if not pair_name or '-' not in pair_name:
+                continue
+
+            assets = pair_name.split('-')
+            if len(assets) != 2:
+                continue
+
+            asset_a, asset_b = assets
+
+            # Get current prices
+            if asset_a in self.price_history.columns and asset_b in self.price_history.columns:
+                price_a = self.price_history[asset_a].iloc[-1]
+                price_b = self.price_history[asset_b].iloc[-1]
+
+                # Calculate z-score from the strategy engine
+                pair_data = self.engine.active_pairs.get(pair_name, {})
+                current_z = pair_data.get('last_z_score', 0)
+
+                # Get strategy parameters
+                z_entry = self.engine.params['signals']['z_entry']
+                z_exit = self.engine.params['signals']['z_exit_long']
+                z_stop = self.engine.params['signals']['z_stop']
+
+                current_positions = len([p for p in self.positions.values() if abs(p) > 0])
+                max_positions = self.engine.params['portfolio']['max_positions']
+
+                # Log current signal analysis
+                logger.info(f"📊 Current z-score: {current_z:.2f} | Prices: {asset_a}={price_a:.2f}, {asset_b}={price_b:.2f}")
+                logger.info(f"🎯 Z-score threshold: {z_entry}, Current positions: {current_positions}/{max_positions}")
+
+                # Check entry conditions
+                if abs(current_z) >= z_entry and current_positions < max_positions:
+                    if current_z > 0:
+                        logger.info(f"✅ 🚀 ENTRY SIGNAL - Long spread (z={current_z:.2f} > {z_entry})")
+                    else:
+                        logger.info(f"✅ 📉 ENTRY SIGNAL - Short spread (z={current_z:.2f} < -{z_entry})")
+                else:
+                    if abs(current_z) < z_entry:
+                        logger.info(f"⚠️ ❌ NO ENTRY - Z-score {abs(current_z):.2f} below threshold {z_entry}")
+                    elif current_positions >= max_positions:
+                        logger.info(f"⚠️ ❌ NO ENTRY - Max positions reached ({current_positions}/{max_positions})")
+
+        # Check open positions for exit signals
+        open_positions = [p for p in self.positions.items() if abs(p[1]) > 0]
+        if open_positions:
+            logger.info(f"🚪 Checking {len(open_positions)} open position(s)")
+            for pair_name, position in open_positions:
+                pair_data = self.engine.active_pairs.get(pair_name, {})
+                current_z = pair_data.get('last_z_score', 0)
+                z_exit = self.engine.params['signals']['z_exit_long']
+                z_stop = self.engine.params['signals']['z_stop']
+
+                logger.info(f"🚪 {pair_name}: z-score: {current_z:.2f} | Exit threshold: {z_exit} | Stop loss: {z_stop}")
+
+                # Check exit conditions
+                if abs(current_z) <= z_exit:
+                    logger.info(f"🛑 ✅ EXIT SIGNAL - Z-score {abs(current_z):.2f} below exit threshold {z_exit}")
+                elif abs(current_z) >= z_stop:
+                    logger.info(f"🚨 🛑 STOP LOSS - Z-score {abs(current_z):.2f} exceeds stop {z_stop}")
+                else:
+                    logger.info(f"➤ 🔄 HOLD POSITION - Z-score {abs(current_z):.2f} between exit ({z_exit}) and stop ({z_stop})")
+
+        # Log signal summary
         signal_summary = {
             'timestamp': datetime.now().isoformat(),
             'n_pairs': len(signals),
@@ -303,7 +371,7 @@ class V6StrategyExecutor:
             'neutral': sum(1 for s in signals.values() if s == 0)
         }
 
-        logger.info(f"📊 SIGNALS: {signal_summary['long_signals']} long, {signal_summary['short_signals']} short, {signal_summary['neutral']} neutral")
+        logger.info(f"📊 SIGNALS SUMMARY: {signal_summary['long_signals']} long, {signal_summary['short_signals']} short, {signal_summary['neutral']} neutral")
 
         if self.db and self.deployment_id:
             self.db.log_signal(self.deployment_id, signal_summary)
