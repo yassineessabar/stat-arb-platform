@@ -1,0 +1,29 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy strategy executor
+COPY strategy_executor.py .
+COPY lib/ ./lib/
+
+# Create directories for logs and configs
+RUN mkdir -p /app/logs /app/configs
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Run the strategy executor
+CMD ["python", "strategy_executor.py"]

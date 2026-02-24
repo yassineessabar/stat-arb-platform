@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { NavHeader } from "@/components/layout/nav-header";
 import { DatabaseService, StrategyDeployment, Position, Trade } from "@/lib/supabase";
+import DeploymentModal from "@/components/DeploymentModal";
 
 type Environment = 'paper' | 'live';
 type StrategyStatus = 'stopped' | 'running' | 'paused' | 'error';
@@ -56,6 +57,9 @@ interface LogEvent {
 interface StrategyParameters {
   strategy_name: string;
   trading_mode: 'paper' | 'live';
+  use_v6_engine?: boolean;
+  universe?: string[];
+  portfolio_value?: number;
   symbol_1: string;
   symbol_2: string;
   lookback_period: number;
@@ -102,19 +106,24 @@ export default function ExecutionPage() {
   const [activeDeployments, setActiveDeployments] = useState<StrategyDeployment[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [logEvents, setLogEvents] = useState<LogEvent[]>([]);
+  const [strategyLogs, setStrategyLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [showServerDeployModal, setShowServerDeployModal] = useState(false);
 
   const [strategyParams, setStrategyParams] = useState<StrategyParameters>({
-    strategy_name: 'MeanReversion_ETHBTC',
+    strategy_name: 'StatArb_v6_Multi',
     trading_mode: 'paper',
+    use_v6_engine: true,  // Use backtest engine by default
+    universe: ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT', 'AVAXUSDT', 'DOGEUSDT'],
+    portfolio_value: 10000,
     symbol_1: 'ETHUSDT',
     symbol_2: 'BTCUSDT',
-    lookback_period: 24,
-    entry_z_score: 2.0,
-    exit_z_score: 0.5,
-    stop_loss_z_score: 3.0,
+    lookback_period: 180,  // v6 default
+    entry_z_score: 1.0,    // v6 parameter
+    exit_z_score: 0.2,     // v6 parameter
+    stop_loss_z_score: 3.5, // v6 parameter
     position_size: 1000,
-    max_positions: 3,
+    max_positions: 30,     // v6 allows up to 30 pairs
     rebalance_frequency: 5
   });
 
@@ -136,30 +145,53 @@ export default function ExecutionPage() {
     loadActiveDeployments();
   }, []);
 
-  // Load active deployments from database
+  // Load active deployments from database and get latest running strategy from files
   const loadActiveDeployments = async () => {
     try {
-      const { data, error } = await DatabaseService.getActiveDeployments();
-      if (error) {
-        addLog('ERROR', `Failed to load deployments: ${error.message}`, 'critical');
-        return;
+      // First check for currently running strategies from the file system
+      const response = await fetch('/api/strategy/stop');
+      const fileData = await response.json();
+
+      // Find the latest running strategy (not stale)
+      const runningStrategies = fileData.strategies?.filter((s: any) => s.status === 'running') || [];
+
+      if (runningStrategies.length > 0) {
+        // Sort by processId to get the most recent (they contain timestamps)
+        const latestStrategy = runningStrategies.sort((a: any, b: any) =>
+          b.processId.localeCompare(a.processId)
+        )[0];
+
+        // Only update if it's a different strategy to avoid loops
+        if (deploymentProcessId !== latestStrategy.processId) {
+          setDeploymentProcessId(latestStrategy.processId);
+          setStrategyStatus('running');
+          setEnvironment(latestStrategy.trading_mode);
+          addLog('DEPLOYMENT', `Loaded running strategy: ${latestStrategy.strategy_name} (${latestStrategy.processId})`, 'info');
+
+          // Load strategy logs for this deployment
+          setTimeout(() => loadStrategyLogs(), 500);
+        }
+      } else {
+        // No running strategies found, show stopped state
+        if (strategyStatus === 'running') {
+          setStrategyStatus('stopped');
+          setDeploymentProcessId(null);
+          addLog('DEPLOYMENT', 'No active strategies found', 'info');
+        }
       }
 
-      setActiveDeployments(data || []);
+      // Also load database deployments for position data
+      const { data, error } = await DatabaseService.getActiveDeployments();
+      if (!error && data) {
+        setActiveDeployments(data);
 
-      // If we have active deployments, update UI state
-      if (data && data.length > 0) {
-        const deployment = data[0]; // Get first active deployment
-        setDeploymentProcessId(deployment.process_id);
-        setStrategyStatus('running');
-        setEnvironment(deployment.trading_mode);
-        addLog('DEPLOYMENT', `Found active deployment: ${deployment.strategy_name}`, 'info');
-
-        // Load positions for this deployment
-        loadPositionsForDeployment(deployment.id);
+        // Load positions for the first deployment if available
+        if (data.length > 0) {
+          loadPositionsForDeployment(data[0].id);
+        }
       }
     } catch (error) {
-      addLog('ERROR', `Database error: ${error}`, 'critical');
+      addLog('ERROR', `Deployment load error: ${error}`, 'critical');
     }
   };
 
@@ -176,6 +208,48 @@ export default function ExecutionPage() {
       addLog('STRATEGY', `Loaded ${data?.length || 0} positions from database`, 'info');
     } catch (error) {
       addLog('ERROR', `Position load error: ${error}`, 'warning');
+    }
+  };
+
+  // Load strategy logs from database first, fallback to files
+  const loadStrategyLogs = async () => {
+    // Use the current deploymentProcessId
+    const processId = deploymentProcessId;
+
+    if (!processId) {
+      setStrategyLogs([]);
+      return;
+    }
+
+    try {
+      // First try to get logs from database (preferred)
+      const dbResponse = await fetch(`/api/strategy/db-logs?processId=${processId}&limit=50`);
+      const dbResult = await dbResponse.json();
+
+      if (dbResult.success && dbResult.logs && dbResult.logs.length > 0) {
+        console.log('📊 Loading logs from database:', dbResult.logs.length, 'entries');
+        setStrategyLogs(dbResult.logs);
+        return;
+      }
+
+      // Fallback to file-based logs if database logs are not available
+      console.log('📁 Database logs not available, falling back to file-based logs');
+      const fileResponse = await fetch(`/api/strategy/logs?processId=${processId}&lines=50`);
+      const fileResult = await fileResponse.json();
+
+      if (fileResult.success && fileResult.logs) {
+        console.log('📁 Loading logs from files:', fileResult.logs.length, 'entries');
+        setStrategyLogs(fileResult.logs);
+      } else {
+        // Log file might not exist yet for new deployments
+        if (!fileResult.error?.includes('Log file not found')) {
+          console.warn('Failed to load strategy logs:', fileResult.error);
+        }
+        setStrategyLogs([]);
+      }
+    } catch (error) {
+      console.warn('Error fetching strategy logs:', error);
+      setStrategyLogs([]);
     }
   };
 
@@ -302,9 +376,10 @@ export default function ExecutionPage() {
       fetchExecutionData();
       const interval = setInterval(() => {
         fetchExecutionData();
-        // Refresh database data every 30 seconds
-        if (Date.now() % 30000 < 2000) {
+        // Refresh database data and strategy logs every 10 seconds
+        if (Date.now() % 10000 < 2000) {
           loadActiveDeployments();
+          loadStrategyLogs();
         }
       }, 2000);
       return () => clearInterval(interval);
@@ -349,8 +424,11 @@ export default function ExecutionPage() {
         addLog('DEPLOYMENT', `Strategy deployed successfully (PID: ${result.processId})`, 'info');
         addLog('STRATEGY', `Running ${strategyParams.strategy_name} in ${strategyParams.trading_mode.toUpperCase()} mode`, 'info');
 
-        // Refresh deployments from database
-        setTimeout(() => loadActiveDeployments(), 1000);
+        // Refresh deployments from database and start loading logs
+        setTimeout(() => {
+          loadActiveDeployments();
+          loadStrategyLogs();
+        }, 1000);
       } else {
         addLog('ERROR', `Deployment failed: ${result.error}`, 'critical');
       }
@@ -573,6 +651,43 @@ export default function ExecutionPage() {
               </h3>
 
               <div className="space-y-4">
+                {/* Engine Selection */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-medium text-blue-900">Strategy Engine</h4>
+                    <label className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        checked={strategyParams.use_v6_engine}
+                        onChange={(e) => {
+                          const useV6 = e.target.checked;
+                          setStrategyParams({
+                            ...strategyParams,
+                            use_v6_engine: useV6,
+                            entry_z_score: useV6 ? 1.0 : 2.0,
+                            exit_z_score: useV6 ? 0.2 : 0.5,
+                            stop_loss_z_score: useV6 ? 3.5 : 3.0,
+                            max_positions: useV6 ? 30 : 3,
+                            lookback_period: useV6 ? 180 : 24
+                          });
+                        }}
+                        className="rounded"
+                      />
+                      <span className="text-sm font-medium text-blue-900">Use v6 Backtest Engine</span>
+                    </label>
+                  </div>
+                  {strategyParams.use_v6_engine ? (
+                    <div className="text-xs text-blue-700">
+                      ✅ Using exact backtest strategy with Kalman filter, regime detection, and multi-pair trading.
+                      <br />Parameters: Entry Z={strategyParams.entry_z_score}, Exit Z={strategyParams.exit_z_score}, Max {strategyParams.max_positions} pairs
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-600">
+                      Using simple single-pair strategy with basic z-score signals.
+                    </div>
+                  )}
+                </div>
+
                 {/* Strategy Info */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -601,8 +716,28 @@ export default function ExecutionPage() {
                   </div>
                 </div>
 
-                {/* Trading Pairs */}
-                <div className="grid grid-cols-2 gap-4">
+                {/* Trading Pairs or Universe */}
+                {strategyParams.use_v6_engine ? (
+                  <div>
+                    <label className="block text-sm font-medium text-neutral-700 mb-1">
+                      Trading Universe (comma-separated)
+                    </label>
+                    <textarea
+                      value={strategyParams.universe?.join(', ') || ''}
+                      onChange={(e) => {
+                        const universe = e.target.value.split(',').map(s => s.trim().toUpperCase()).filter(s => s);
+                        setStrategyParams({...strategyParams, universe});
+                      }}
+                      className="w-full px-3 py-2 border border-neutral-300 rounded-md text-sm"
+                      rows={2}
+                      placeholder="BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT"
+                    />
+                    <div className="text-xs text-gray-500 mt-1">
+                      Strategy will automatically find best pairs from these assets
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-neutral-700 mb-1">
                       Symbol 1
@@ -628,6 +763,7 @@ export default function ExecutionPage() {
                     />
                   </div>
                 </div>
+                )}
 
                 {/* Statistical Parameters */}
                 <div className="border-t pt-4">
@@ -843,17 +979,30 @@ export default function ExecutionPage() {
           </div>
           <div className="flex space-x-3">
             {strategyStatus === 'stopped' && (
-              <button
-                onClick={handleDeploy}
-                disabled={!apiConnected}
-                className={`px-4 py-2 text-sm font-medium rounded-md ${
-                  apiConnected
-                    ? 'bg-green-600 text-white hover:bg-green-700'
-                    : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
-                }`}
-              >
-                Deploy
-              </button>
+              <>
+                <button
+                  onClick={handleDeploy}
+                  disabled={!apiConnected}
+                  className={`px-4 py-2 text-sm font-medium rounded-md ${
+                    apiConnected
+                      ? 'bg-green-600 text-white hover:bg-green-700'
+                      : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
+                  }`}
+                >
+                  Deploy Locally
+                </button>
+                <button
+                  onClick={() => setShowServerDeployModal(true)}
+                  disabled={!apiConnected}
+                  className={`px-4 py-2 text-sm font-medium rounded-md ${
+                    apiConnected
+                      ? 'bg-blue-600 text-white hover:bg-blue-700'
+                      : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
+                  }`}
+                >
+                  Deploy to Server (24/7)
+                </button>
+              </>
             )}
             {strategyStatus === 'running' && (
               <button
@@ -1050,24 +1199,166 @@ export default function ExecutionPage() {
 
         {/* 4. Logs & Risk Events */}
         <div className="bg-white border border-neutral-200 rounded-lg p-6">
-          <h2 className="text-lg font-medium text-neutral-900 mb-4">Logs & Risk Events</h2>
+          <h2 className="text-lg font-medium text-neutral-900 mb-4">
+            Strategy Logs & Signal Analysis
+            {deploymentProcessId && (
+              <span className="ml-2 text-sm text-neutral-500 font-normal">
+                (Process: {deploymentProcessId.split('_')[1]})
+              </span>
+            )}
+          </h2>
           <div className="bg-neutral-900 rounded-lg p-4 h-64 overflow-y-auto font-mono text-xs">
-            {logEvents.length > 0 ? logEvents.map((event, idx) => (
-              <div key={idx} className={`mb-1 ${
-                event.severity === 'critical' ? 'text-red-400' :
-                event.severity === 'warning' ? 'text-orange-400' :
-                'text-green-400'
-              }`}>
-                <span className="text-neutral-500">[{event.time.toLocaleTimeString()}]</span>{' '}
-                <span className="text-neutral-300">{event.type}:</span>{' '}
-                {event.message}
+            {strategyLogs.length > 0 ? (() => {
+              // Group signal analysis logs together
+              const signalGroups: any[] = [];
+              let currentGroup: any[] = [];
+
+              strategyLogs.forEach((log) => {
+                const isSignalLog = log.message.includes('SIGNAL CHECK') ||
+                                   log.message.includes('ENTRY CRITERIA') ||
+                                   log.message.includes('NO ENTRY') ||
+                                   log.message.includes('ENTRY SIGNAL TRIGGERED') ||
+                                   log.message.includes('EXIT CHECK');
+
+                if (isSignalLog) {
+                  if (log.message.includes('SIGNAL CHECK')) {
+                    // Start new group
+                    if (currentGroup.length > 0) {
+                      signalGroups.push(currentGroup);
+                    }
+                    currentGroup = [log];
+                  } else {
+                    currentGroup.push(log);
+                  }
+                } else {
+                  // Non-signal log - close current group and show individual log
+                  if (currentGroup.length > 0) {
+                    signalGroups.push(currentGroup);
+                    currentGroup = [];
+                  }
+                  signalGroups.push([log]);
+                }
+              });
+
+              if (currentGroup.length > 0) {
+                signalGroups.push(currentGroup);
+              }
+
+              return signalGroups.map((group, groupIndex) => {
+                const isSignalGroup = group.some((log: any) =>
+                  log.message.includes('SIGNAL CHECK') ||
+                  log.message.includes('ENTRY CRITERIA') ||
+                  log.message.includes('NO ENTRY') ||
+                  log.message.includes('EXIT CHECK')
+                );
+
+                if (isSignalGroup && group.length > 1) {
+                  // Signal analysis group - format as card
+                  const timestamp = new Date(group[0].timestamp).toLocaleTimeString();
+                  return (
+                    <div key={groupIndex} className="mb-3 p-2 bg-neutral-800/30 rounded border border-neutral-700/50">
+                      <div className="text-blue-400 font-semibold text-xs mb-1">
+                        🔍 Signal Analysis - {timestamp}
+                      </div>
+                      {group.map((log: any, logIndex: number) => (
+                        <div key={logIndex} className={`text-xs ml-2 ${
+                          log.message.includes('SIGNAL CHECK') ? 'text-blue-300' :
+                          log.message.includes('ENTRY CRITERIA') ? 'text-cyan-300' :
+                          log.message.includes('✅') ? 'text-green-400 font-medium' :
+                          log.message.includes('❌') ? 'text-yellow-400' :
+                          log.message.includes('EXIT CHECK') ? 'text-purple-300' :
+                          'text-neutral-300'
+                        }`}>
+                          {log.message.includes('SIGNAL CHECK') && '📊 '}
+                          {log.message.includes('ENTRY CRITERIA') && '🎯 '}
+                          {log.message.includes('❌') && '⚠️ '}
+                          {log.message.includes('✅') && '✅ '}
+                          {log.message.includes('EXIT CHECK') && '🚪 '}
+                          {log.message.replace(/^(SIGNAL CHECK|ENTRY CRITERIA|EXIT CHECK) - /, '')}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                } else {
+                  // Individual log entries
+                  return group.map((log: any, logIndex: number) => (
+                    <div key={`${groupIndex}-${logIndex}`} className={`mb-1 text-xs ${
+                      log.level === 'error' ? 'text-red-400' :
+                      log.level === 'warning' ? 'text-orange-400' :
+                      log.message.includes('Connected') ? 'text-green-400' :
+                      log.message.includes('Starting') ? 'text-blue-400' :
+                      log.message.includes('Status') ? 'text-cyan-300' :
+                      'text-neutral-400'
+                    }`}>
+                      <span className="text-neutral-500">[{new Date(log.timestamp).toLocaleTimeString()}]</span>{' '}
+                      {log.message}
+                    </div>
+                  ));
+                }
+              });
+            })() : logEvents.length > 0 ? (
+              // Fallback to frontend events if no strategy logs available
+              logEvents.map((event, idx) => (
+                <div key={idx} className={`mb-1 ${
+                  event.severity === 'critical' ? 'text-red-400' :
+                  event.severity === 'warning' ? 'text-orange-400' :
+                  'text-green-400'
+                }`}>
+                  <span className="text-neutral-500">[{event.time.toLocaleTimeString()}]</span>{' '}
+                  <span className="text-neutral-300">{event.type}:</span>{' '}
+                  {event.message}
+                </div>
+              ))
+            ) : (
+              <div className="text-neutral-500">
+                {deploymentProcessId ? 'Loading strategy logs...' : 'No strategy running - Deploy a strategy to see logs'}
               </div>
-            )) : (
-              <div className="text-neutral-500">No events logged</div>
             )}
           </div>
         </div>
       </main>
+
+      {/* Server Deployment Modal */}
+      <DeploymentModal
+        isOpen={showServerDeployModal}
+        onClose={() => setShowServerDeployModal(false)}
+        strategyConfig={{
+          ...strategyParams,
+          api_key: apiCredentials.apiKey,
+          api_secret: apiCredentials.secretKey,
+          testnet: apiCredentials.testnet
+        }}
+        onDeploy={async (deploymentConfig) => {
+          try {
+            setLoading(true);
+            addLog('DEPLOYMENT', 'Initiating server deployment...', 'info');
+
+            const response = await fetch('/api/deploy-server', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(deploymentConfig)
+            });
+
+            if (!response.ok) {
+              const error = await response.json();
+              throw new Error(error.details || 'Deployment failed');
+            }
+
+            const result = await response.json();
+            addLog('DEPLOYMENT', `Deployment successful! ID: ${result.deploymentId}`, 'info');
+            setShowServerDeployModal(false);
+
+            // Show success notification
+            alert(`✅ Strategy deployed successfully!\n\nDeployment ID: ${result.deploymentId}\nServer: ${result.details.host}\nPath: ${result.details.deploymentPath}\n\nYour strategy is now running 24/7 on the server.`);
+          } catch (error: any) {
+            console.error('Deployment error:', error);
+            addLog('ERROR', `Deployment failed: ${error.message}`, 'critical');
+            alert(`❌ Deployment failed: ${error.message}`);
+          } finally {
+            setLoading(false);
+          }
+        }}
+      />
     </>
   );
 }

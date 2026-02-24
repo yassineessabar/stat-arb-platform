@@ -1,0 +1,19 @@
+# Python dependencies for Statistical Arbitrage Platform
+pandas>=1.5.0
+numpy>=1.23.0
+ccxt>=4.0.0
+yfinance>=0.2.0
+statsmodels>=0.13.0
+scikit-learn>=1.1.0
+matplotlib>=3.5.0
+seaborn>=0.12.0
+jupyter>=1.0.0
+jupyterlab>=3.4.0
+ipywidgets>=8.0.0
+python-dotenv>=0.20.0
+supabase>=2.0.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
+binance-connector>=3.0.0
+binance-futures-connector>=3.0.0
+websocket-client>=1.4.0

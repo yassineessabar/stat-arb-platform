@@ -74,11 +74,11 @@ export async function POST(request: Request) {
       }, { status: 500 });
     }
 
-    // Spawn the Python process
+    // Spawn the Python process with process ID for tracking
     const strategyProcess = spawn(pythonPath, [
       scriptPath,
       '--config', configPath,
-      '--mode', config.trading_mode
+      '--process-id', processId
     ], {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -118,7 +118,12 @@ export async function POST(request: Request) {
     // Log initial deployment
     logStream.write(`[${new Date().toISOString()}] Strategy deployed: ${config.strategy_name}\n`);
     logStream.write(`[${new Date().toISOString()}] Mode: ${config.trading_mode}\n`);
-    logStream.write(`[${new Date().toISOString()}] Symbols: ${config.symbol_1} / ${config.symbol_2}\n`);
+    logStream.write(`[${new Date().toISOString()}] Engine: ${config.use_v6_engine ? 'v6 Backtest Engine' : 'Simple Strategy'}\n`);
+    if (config.use_v6_engine && config.universe) {
+      logStream.write(`[${new Date().toISOString()}] Universe: ${config.universe.join(', ')}\n`);
+    } else {
+      logStream.write(`[${new Date().toISOString()}] Symbols: ${config.symbol_1} / ${config.symbol_2}\n`);
+    }
     logStream.write(`[${new Date().toISOString()}] Process ID: ${processId}\n`);
     logStream.write(`[${new Date().toISOString()}] System PID: ${strategyProcess.pid}\n`);
 
@@ -127,27 +132,32 @@ export async function POST(request: Request) {
       const { data: deployment, error: dbError } = await supabase
         .from('strategy_deployments')
         .insert([{
+          user_id: null, // No user authentication for now
           process_id: processId,
           strategy_name: config.strategy_name,
           trading_mode: config.trading_mode,
           status: 'running',
-          symbol_1: config.symbol_1,
-          symbol_2: config.symbol_2,
-          entry_z_score: config.entry_z_score,
-          exit_z_score: config.exit_z_score,
-          position_size: config.position_size,
-          max_positions: config.max_positions,
-          system_pid: strategyProcess.pid,
-          config_file_path: configPath,
-          log_file_path: logPath
+          symbol_1: config.universe?.[0] || config.symbol_1 || 'MULTI',
+          symbol_2: config.universe?.[1] || config.symbol_2 || 'PAIR',
+          entry_z_score: 1.0,  // V6 default
+          exit_z_score: 0.2,   // V6 default
+          position_size: config.position_size || 1000,
+          max_positions: 30,   // V6 default
+          total_trades: 0,
+          total_pnl: 0
         }])
         .select()
 
       if (dbError) {
-        console.error('Database save error:', dbError)
+        console.error('❌ Database save error:', JSON.stringify(dbError, null, 2))
+        logStream.write(`[${new Date().toISOString()}] ❌ Database save error: ${JSON.stringify(dbError)}\n`)
         // Continue anyway - don't fail deployment for DB issues
+      } else if (deployment && deployment.length > 0) {
+        console.log('✅ Strategy saved to database with ID:', deployment[0].id)
+        logStream.write(`[${new Date().toISOString()}] ✅ Strategy saved to database with ID: ${deployment[0].id}\n`)
       } else {
-        console.log('Strategy saved to database:', deployment?.[0]?.id)
+        console.error('❌ Database save failed: No data returned')
+        logStream.write(`[${new Date().toISOString()}] ❌ Database save failed: No data returned\n`)
       }
 
       // Log deployment to database
