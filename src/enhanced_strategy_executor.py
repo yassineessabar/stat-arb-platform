@@ -25,13 +25,19 @@ class StatArbBot:
         with open(config_file, 'r') as f:
             self.config = json.load(f)
 
-        # Initialize exchange
+        # Initialize exchange (Testnet)
         self.exchange = ccxt.binance({
             'apiKey': self.config['api_key'],
             'secret': self.config['api_secret'],
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'spot'
+            },
+            'urls': {
+                'api': {
+                    'public': 'https://testnet.binance.vision/api/v3',
+                    'private': 'https://testnet.binance.vision/api/v3',
+                },
             }
         })
 
