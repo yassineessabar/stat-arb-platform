@@ -138,10 +138,15 @@ class StatArbBot:
             async with self.client:
                 ticker = await self.client.get_ticker_24hr(binance_symbol)
 
-            price = float(ticker['lastPrice'])
-            bid = float(ticker['bidPrice']) if ticker.get('bidPrice') else price
-            ask = float(ticker['askPrice']) if ticker.get('askPrice') else price
-            volume = float(ticker['quoteVolume']) if ticker.get('quoteVolume') else 0
+            # Safely parse ticker data
+            price = float(ticker['lastPrice']) if ticker.get('lastPrice') else 0
+            if price <= 0:
+                logger.error(f"Invalid price for {symbol}: {ticker.get('lastPrice')}")
+                return None
+
+            bid = float(ticker['bidPrice']) if ticker.get('bidPrice') and ticker['bidPrice'] not in [None, ''] else price
+            ask = float(ticker['askPrice']) if ticker.get('askPrice') and ticker['askPrice'] not in [None, ''] else price
+            volume = float(ticker['quoteVolume']) if ticker.get('quoteVolume') and ticker['quoteVolume'] not in [None, ''] else 0
 
             return {
                 'price': price,

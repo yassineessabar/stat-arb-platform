@@ -218,6 +218,11 @@ class ExecutionEngine:
             ticker = await self.client.get_ticker_24hr(symbol)
             current_price = float(ticker['lastPrice'])
 
+            # Validate price
+            if current_price <= 0:
+                logger.error(f"Invalid price received for {symbol}: {current_price}")
+                return None
+
             # Calculate quantity
             quantity = abs(difference_usd) / current_price
 
