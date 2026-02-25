@@ -31,15 +31,24 @@ class StatArbBot:
             'secret': self.config['api_secret'],
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'spot'
+                'defaultType': 'spot',
+                'sandboxMode': True
             },
+            'hostname': 'testnet.binance.vision',
             'urls': {
+                'logo': 'https://user-images.githubusercontent.com/1294454/29604020-d5483cdc-87ee-11e7-94c7-d1a8d9169293.jpg',
                 'api': {
-                    'public': 'https://testnet.binance.vision/api/v3',
-                    'private': 'https://testnet.binance.vision/api/v3',
+                    'public': 'https://testnet.binance.vision/api',
+                    'private': 'https://testnet.binance.vision/api',
+                    'v3': 'https://testnet.binance.vision/api/v3',
+                    'v1': 'https://testnet.binance.vision/api/v1',
                 },
+                'www': 'https://testnet.binance.vision',
+                'doc': 'https://binance-docs.github.io/apidocs/spot/en',
+                'fees': 'https://www.binance.com/en/fee/schedule',
             }
         })
+        self.exchange.set_sandbox_mode(True)
 
         self.positions = {}
         self.price_history = {}
