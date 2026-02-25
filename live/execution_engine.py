@@ -226,8 +226,13 @@ class ExecutionEngine:
             # Calculate quantity
             quantity = abs(difference_usd) / current_price
 
-            # Round to appropriate precision
+            # Round to appropriate precision for testnet
             quantity = self._round_quantity(symbol, quantity)
+
+            # Ensure minimum quantity for testnet
+            if quantity < 0.001:
+                quantity = 0.001
+                logger.info(f"Adjusting {symbol} quantity to minimum: {quantity}")
 
             if quantity == 0:
                 logger.warning(f"Quantity rounded to zero for {symbol}")
@@ -312,15 +317,15 @@ class ExecutionEngine:
 
     def _round_quantity(self, symbol: str, quantity: float) -> float:
         """Round quantity to appropriate precision for symbol."""
-        # Use appropriate precision for common trading pairs
+        # Use conservative precision for Binance Futures testnet
         if 'BTC' in symbol:
-            return round(quantity, 5)  # BTC: 5 decimal places
+            return round(quantity, 3)  # BTC: 3 decimal places for futures
         elif 'ETH' in symbol:
-            return round(quantity, 4)  # ETH: 4 decimal places
+            return round(quantity, 3)  # ETH: 3 decimal places for futures
         elif 'BNB' in symbol:
-            return round(quantity, 3)  # BNB: 3 decimal places
+            return round(quantity, 2)  # BNB: 2 decimal places for futures
         else:
-            return round(quantity, 3)  # Default: 3 decimal places
+            return round(quantity, 2)  # Default: 2 decimal places
 
     async def _monitor_order(self, order_id: int) -> None:
         """Monitor order until filled or timeout."""

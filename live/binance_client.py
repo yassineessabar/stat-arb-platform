@@ -51,7 +51,7 @@ class BinanceClient:
 
         # Base URLs
         if testnet:
-            self.base_url = "https://testnet.binancefuture.com"
+            self.base_url = "https://testnet.binancefuture.com"  # Futures testnet
         else:
             self.base_url = "https://fapi.binance.com"
 
