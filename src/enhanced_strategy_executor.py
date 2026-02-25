@@ -71,7 +71,7 @@ class StatArbBot:
             api_key=self.config['api_key'],
             api_secret=self.config['api_secret'],
             testnet=True,
-            paper_trading=True  # Enable paper trading to test execution patterns
+            paper_trading=False  # ENABLE REAL TRADING on testnet
         )
 
         # Initialize execution engine with working pattern
