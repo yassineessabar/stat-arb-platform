@@ -306,8 +306,8 @@ class StatArbBot:
                     target_positions = {binance_symbol: position_size_usd}
                     await self.execution_engine.set_target_positions(target_positions)
 
-                    # Start order processing
-                    asyncio.create_task(self.process_orders())
+                    # Start order processing (don't await to avoid blocking)
+                    await self.process_orders()
 
                     # Track position
                     self.positions[symbol] = {
@@ -326,8 +326,8 @@ class StatArbBot:
                     target_positions = {binance_symbol: -position_size_usd}
                     await self.execution_engine.set_target_positions(target_positions)
 
-                    # Start order processing
-                    asyncio.create_task(self.process_orders())
+                    # Start order processing (don't await to avoid blocking)
+                    await self.process_orders()
 
                     # Track position
                     self.positions[symbol] = {
@@ -366,12 +366,11 @@ class StatArbBot:
                         timeout=1.0
                     )
 
-                    # Execute the trade with proper session management
-                    async with self.client:
-                        result = await self.execution_engine._execute_trade(trade)
-                        if result:
-                            logger.info(f"✅ ORDER EXECUTED: {result['symbol']} {result['side']}")
-                            self.order_ids.append(result.get('orderId', 'unknown'))
+                    # Execute the trade (session managed by ExecutionEngine)
+                    result = await self.execution_engine._execute_trade(trade)
+                    if result:
+                        logger.info(f"✅ ORDER EXECUTED: {result['symbol']} {result['side']}")
+                        self.order_ids.append(result.get('orderId', 'unknown'))
 
                     self.execution_engine.order_queue.task_done()
 
