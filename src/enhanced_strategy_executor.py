@@ -50,28 +50,23 @@ class StatArbBot:
         logger.info("🚀 INITIALIZING STATISTICAL ARBITRAGE BOT")
         logger.info("=" * 60)
 
-        # Initialize Binance Testnet with simple configuration
+        # Initialize Binance Testnet for Futures trading (like the working script)
         self.exchange = ccxt.binance({
             'apiKey': self.config['api_key'],
             'secret': self.config['api_secret'],
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'spot',  # Only spot trading
+                'defaultType': 'future',  # Use futures like working script
                 'adjustForTimeDifference': True,
             }
         })
 
-        # Set testnet mode properly
+        # Set sandbox mode for futures testnet
         self.exchange.set_sandbox_mode(True)
 
-        # Override ONLY what's needed for testnet spot trading
-        self.exchange.urls['api']['public'] = 'https://testnet.binance.vision/api/v3'
-        self.exchange.urls['api']['private'] = 'https://testnet.binance.vision/api/v3'
-
-        # Disable all margin/futures/staking features that don't exist on testnet
-        self.exchange.has['margin'] = False
-        self.exchange.has['future'] = False
-        self.exchange.has['option'] = False
+        # Use Futures testnet URLs (same as working script)
+        self.exchange.urls['api']['public'] = 'https://testnet.binancefuture.com/fapi/v1'
+        self.exchange.urls['api']['private'] = 'https://testnet.binancefuture.com/fapi/v1'
 
         # Load markets
         logger.info("Loading market data...")
