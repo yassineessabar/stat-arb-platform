@@ -312,9 +312,15 @@ class ExecutionEngine:
 
     def _round_quantity(self, symbol: str, quantity: float) -> float:
         """Round quantity to appropriate precision for symbol."""
-        # This should be based on symbol info from exchange
-        # For simplicity, round to 6 decimal places
-        return round(quantity, 6)
+        # Use appropriate precision for common trading pairs
+        if 'BTC' in symbol:
+            return round(quantity, 5)  # BTC: 5 decimal places
+        elif 'ETH' in symbol:
+            return round(quantity, 4)  # ETH: 4 decimal places
+        elif 'BNB' in symbol:
+            return round(quantity, 3)  # BNB: 3 decimal places
+        else:
+            return round(quantity, 3)  # Default: 3 decimal places
 
     async def _monitor_order(self, order_id: int) -> None:
         """Monitor order until filled or timeout."""
