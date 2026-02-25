@@ -1,0 +1,22 @@
+{
+  "exchange": "binance",
+  "trading_pairs": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "BNB/USDT"
+  ],
+  "lookback_period": 10,
+  "entry_threshold": 2.0,
+  "exit_threshold": 0.5,
+  "position_size": 50,
+  "max_positions": 3,
+  "update_interval": 10,
+  "stop_loss": 0.03,
+  "take_profit": 0.05,
+  "api_key": "YOUR_BINANCE_API_KEY",
+  "api_secret": "YOUR_BINANCE_API_SECRET",
+  "enable_trading": true,
+  "risk_per_trade": 0.02,
+  "max_daily_loss": 0.1,
+  "use_testnet": true
+}
