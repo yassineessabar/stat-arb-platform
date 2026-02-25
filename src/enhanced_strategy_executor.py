@@ -306,17 +306,21 @@ class StatArbBot:
                     target_positions = {binance_symbol: position_size_usd}
                     await self.execution_engine.set_target_positions(target_positions)
 
-                    # Start order processing (don't await to avoid blocking)
-                    await self.process_orders()
+                    # Start order processing and wait for result
+                    success = await self.process_orders()
 
-                    # Track position
-                    self.positions[symbol] = {
-                        'side': 'long',
-                        'target_usd': position_size_usd,
-                        'entry_price': current_price,
-                        'amount': position_size_usd / current_price,
-                        'entry_time': datetime.now()
-                    }
+                    # Only track position if order was successful
+                    if success:
+                        self.positions[symbol] = {
+                            'side': 'long',
+                            'target_usd': position_size_usd,
+                            'entry_price': current_price,
+                            'amount': position_size_usd / current_price,
+                            'entry_time': datetime.now()
+                        }
+                        logger.info(f"✅ LONG POSITION CREATED: {symbol}")
+                    else:
+                        logger.error(f"❌ FAILED TO CREATE LONG POSITION: {symbol}")
 
             elif signal == 'SELL':
                 if len(self.execution_engine.current_positions) < self.config['max_positions']:
@@ -326,17 +330,21 @@ class StatArbBot:
                     target_positions = {binance_symbol: -position_size_usd}
                     await self.execution_engine.set_target_positions(target_positions)
 
-                    # Start order processing (don't await to avoid blocking)
-                    await self.process_orders()
+                    # Start order processing and wait for result
+                    success = await self.process_orders()
 
-                    # Track position
-                    self.positions[symbol] = {
-                        'side': 'short',
-                        'target_usd': -position_size_usd,
-                        'entry_price': current_price,
-                        'amount': position_size_usd / current_price,
-                        'entry_time': datetime.now()
-                    }
+                    # Only track position if order was successful
+                    if success:
+                        self.positions[symbol] = {
+                            'side': 'short',
+                            'target_usd': -position_size_usd,
+                            'entry_price': current_price,
+                            'amount': position_size_usd / current_price,
+                            'entry_time': datetime.now()
+                        }
+                        logger.info(f"✅ SHORT POSITION CREATED: {symbol}")
+                    else:
+                        logger.error(f"❌ FAILED TO CREATE SHORT POSITION: {symbol}")
 
             elif signal in ['EXIT_LONG', 'EXIT_SHORT'] and symbol in self.positions:
                 logger.info(f"🏁 CLOSING POSITION: {symbol}")
@@ -357,6 +365,7 @@ class StatArbBot:
 
     async def process_orders(self):
         """Process orders using ExecutionEngine"""
+        orders_executed = 0
         try:
             # Process a few orders from the queue
             for _ in range(3):
@@ -371,15 +380,26 @@ class StatArbBot:
                         result = await self.execution_engine._execute_trade(trade)
                         if result:
                             logger.info(f"✅ ORDER EXECUTED: {result['symbol']} {result['side']}")
+                            logger.info(f"   Order ID: {result.get('orderId', 'N/A')}")
+                            logger.info(f"   Status: {result.get('status', 'N/A')}")
                             self.order_ids.append(result.get('orderId', 'unknown'))
+                            orders_executed += 1
+                        else:
+                            logger.error(f"❌ ORDER EXECUTION FAILED for {trade.get('symbol', 'unknown')}")
 
                     self.execution_engine.order_queue.task_done()
+                else:
+                    break
+
+            return orders_executed > 0
 
         except asyncio.TimeoutError:
             # No orders in queue
-            pass
+            logger.debug("No orders in queue to process")
+            return False
         except Exception as e:
             logger.error(f"Error processing orders: {e}")
+            return False
 
     def check_stop_loss_take_profit(self):
         """Check stop loss and take profit for open positions"""
