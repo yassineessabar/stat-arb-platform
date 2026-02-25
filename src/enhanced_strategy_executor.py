@@ -308,6 +308,8 @@ class StatArbBot:
                     self.positions[symbol] = {
                         'side': 'long',
                         'target_usd': position_size_usd,
+                        'entry_price': current_price,
+                        'amount': position_size_usd / current_price,
                         'entry_time': datetime.now()
                     }
 
@@ -326,6 +328,8 @@ class StatArbBot:
                     self.positions[symbol] = {
                         'side': 'short',
                         'target_usd': -position_size_usd,
+                        'entry_price': current_price,
+                        'amount': position_size_usd / current_price,
                         'entry_time': datetime.now()
                     }
 
@@ -357,11 +361,12 @@ class StatArbBot:
                         timeout=1.0
                     )
 
-                    # Execute the trade
-                    result = await self.execution_engine._execute_trade(trade)
-                    if result:
-                        logger.info(f"✅ ORDER EXECUTED: {result['symbol']} {result['side']}")
-                        self.order_ids.append(result.get('orderId', 'unknown'))
+                    # Execute the trade with proper session management
+                    async with self.client:
+                        result = await self.execution_engine._execute_trade(trade)
+                        if result:
+                            logger.info(f"✅ ORDER EXECUTED: {result['symbol']} {result['side']}")
+                            self.order_ids.append(result.get('orderId', 'unknown'))
 
                     self.execution_engine.order_queue.task_done()
 
@@ -473,8 +478,11 @@ class StatArbBot:
                 # Check stop loss and take profit (keep sync for now)
                 # self.check_stop_loss_take_profit()
 
-                # Display current positions
-                self.display_positions()
+                # Display current positions (skip if error)
+                try:
+                    self.display_positions()
+                except Exception as e:
+                    logger.debug(f"Position display error: {e}")
 
                 # Check open orders
                 await self.check_open_orders()
