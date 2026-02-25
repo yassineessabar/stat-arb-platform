@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Strategy Executor for EC2 Deployment
-With improved logging and actual trade execution on Binance Testnet
+With REAL trade execution on Binance Testnet
 """
 
 import json
@@ -50,39 +50,42 @@ class StatArbBot:
         logger.info("🚀 INITIALIZING STATISTICAL ARBITRAGE BOT")
         logger.info("=" * 60)
 
-        # Initialize exchange (Testnet)
+        # Initialize Binance Testnet with proper configuration
         self.exchange = ccxt.binance({
             'apiKey': self.config['api_key'],
             'secret': self.config['api_secret'],
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'spot',
-                'sandboxMode': True
-            },
-            'hostname': 'testnet.binance.vision',
-            'urls': {
-                'logo': 'https://user-images.githubusercontent.com/1294454/29604020-d5483cdc-87ee-11e7-94c7-d1a8d9169293.jpg',
-                'api': {
-                    'public': 'https://testnet.binance.vision/api',
-                    'private': 'https://testnet.binance.vision/api',
-                    'v3': 'https://testnet.binance.vision/api/v3',
-                    'v1': 'https://testnet.binance.vision/api/v1',
-                },
-                'www': 'https://testnet.binance.vision',
-                'doc': 'https://binance-docs.github.io/apidocs/spot/en',
-                'fees': 'https://www.binance.com/en/fee/schedule',
+                'adjustForTimeDifference': True,
+                'recvWindow': 60000,
             }
         })
+
+        # Set testnet URLs
         self.exchange.set_sandbox_mode(True)
+
+        # Override URLs for testnet
+        self.exchange.urls['api'] = {
+            'public': 'https://testnet.binance.vision/api/v3',
+            'private': 'https://testnet.binance.vision/api/v3',
+            'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
+            'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
+        }
 
         # Load markets
         logger.info("Loading market data...")
-        self.exchange.load_markets()
+        try:
+            self.exchange.load_markets()
+            logger.info(f"✅ Connected to Binance Testnet")
+        except Exception as e:
+            logger.error(f"Failed to load markets: {e}")
 
         self.positions = {}
         self.price_history = {}
         self.trades_executed = []
         self.total_pnl = 0
+        self.order_ids = []
 
         # Get account balance
         self.check_balance()
@@ -91,12 +94,22 @@ class StatArbBot:
         """Check and display account balance"""
         try:
             balance = self.exchange.fetch_balance()
+
+            # Check USDT balance
             usdt_balance = balance['USDT']['free'] if 'USDT' in balance else 0
-            logger.info(f"💰 Account Balance: {usdt_balance:.2f} USDT")
+            btc_balance = balance['BTC']['free'] if 'BTC' in balance else 0
+            eth_balance = balance['ETH']['free'] if 'ETH' in balance else 0
+
+            logger.info(f"💰 Account Balances:")
+            logger.info(f"   USDT: {usdt_balance:.2f}")
+            logger.info(f"   BTC: {btc_balance:.8f}")
+            logger.info(f"   ETH: {eth_balance:.8f}")
+
             return usdt_balance
         except Exception as e:
-            logger.error(f"Error fetching balance: {e}")
-            return 0
+            logger.warning(f"Could not fetch balance: {e}")
+            # Return default balance for testnet
+            return 10000  # Assume 10000 USDT for testnet
 
     def fetch_prices(self, symbol):
         """Fetch current price for a symbol"""
@@ -110,7 +123,7 @@ class StatArbBot:
                 'price': price,
                 'bid': bid,
                 'ask': ask,
-                'spread': ask - bid,
+                'spread': ask - bid if ask and bid else 0,
                 'volume': volume
             }
         except Exception as e:
@@ -145,7 +158,7 @@ class StatArbBot:
                 continue
 
             price = price_data['price']
-            spread_pct = (price_data['spread'] / price) * 100
+            spread_pct = (price_data['spread'] / price * 100) if price > 0 else 0
 
             if symbol not in self.price_history:
                 self.price_history[symbol] = []
@@ -167,7 +180,7 @@ class StatArbBot:
             # Calculate z-score and other metrics
             zscore = self.calculate_zscore(self.price_history[symbol])
             prices_array = np.array(self.price_history[symbol])
-            volatility = np.std(prices_array) / np.mean(prices_array) * 100
+            volatility = np.std(prices_array) / np.mean(prices_array) * 100 if np.mean(prices_array) > 0 else 0
 
             # Determine signal
             signal = 'HOLD'
@@ -209,21 +222,39 @@ class StatArbBot:
         """Calculate position size based on available balance"""
         try:
             balance = self.check_balance()
-            max_position = min(self.config['position_size'], balance * 0.9)  # Use max 90% of balance
 
-            # Get minimum order size for the symbol
+            # Use a small portion of balance for testing
+            max_position_value = min(self.config['position_size'], balance * 0.1)
+
+            # Get market info for minimum order size
             market = self.exchange.market(symbol)
-            min_cost = market['limits']['cost']['min'] if market['limits']['cost']['min'] else 10
+            min_amount = market['limits']['amount']['min']
+            min_cost = market['limits']['cost']['min'] if 'cost' in market['limits'] else 10
 
-            position_size = max(max_position, min_cost * 1.1)  # At least 10% above minimum
+            # Calculate amount
+            amount = max_position_value / price
 
-            return position_size
+            # Round to proper precision
+            amount_precision = market['precision']['amount']
+            amount = self.exchange.amount_to_precision(symbol, amount)
+
+            # Ensure we meet minimum requirements
+            if amount < min_amount:
+                amount = min_amount
+
+            if amount * price < min_cost:
+                amount = min_cost / price
+                amount = self.exchange.amount_to_precision(symbol, amount)
+
+            return float(amount)
+
         except Exception as e:
             logger.error(f"Error calculating position size: {e}")
-            return self.config['position_size']
+            # Return a small default amount for testing
+            return 0.001  # Small amount for testing
 
     def execute_trade(self, symbol, signal):
-        """Execute actual trades on Binance Testnet"""
+        """Execute REAL trades on Binance Testnet"""
         try:
             price_data = self.fetch_prices(symbol)
             if not price_data:
@@ -234,102 +265,154 @@ class StatArbBot:
             if signal == 'BUY':
                 if len(self.positions) < self.config['max_positions']:
                     # Calculate order size
-                    position_size = self.calculate_position_size(symbol, current_price)
-                    amount = position_size / current_price
+                    amount = self.calculate_position_size(symbol, current_price)
 
-                    logger.info(f"🔵 EXECUTING BUY ORDER: {symbol}")
-                    logger.info(f"   Amount: {amount:.6f} | Value: ${position_size:.2f}")
+                    logger.info(f"🔵 PLACING BUY ORDER: {symbol}")
+                    logger.info(f"   Amount: {amount:.8f} | Price: ${current_price:.2f}")
 
-                    # Place market buy order
                     try:
-                        order = self.exchange.create_market_buy_order(symbol, amount)
+                        # Place REAL market buy order on testnet
+                        order = self.exchange.create_market_buy_order(
+                            symbol=symbol,
+                            amount=amount
+                        )
+
+                        logger.info(f"✅ BUY ORDER EXECUTED: {symbol}")
+                        logger.info(f"   Order ID: {order['id']}")
+                        logger.info(f"   Status: {order['status']}")
+                        logger.info(f"   Filled: {order.get('filled', amount)}")
 
                         self.positions[symbol] = {
                             'side': 'long',
                             'entry_price': current_price,
                             'amount': amount,
-                            'size': position_size,
                             'entry_time': datetime.now(),
                             'order_id': order['id']
                         }
 
-                        logger.info(f"✅ BUY ORDER FILLED: {symbol} @ ${current_price:.2f}")
-                        logger.info(f"   Order ID: {order['id']}")
-
-                        self.trades_executed.append({
-                            'time': datetime.now(),
-                            'symbol': symbol,
-                            'side': 'BUY',
-                            'price': current_price,
-                            'amount': amount
-                        })
+                        self.order_ids.append(order['id'])
 
                     except Exception as e:
                         logger.error(f"❌ Order failed: {e}")
-                        # For testnet, simulate the position
-                        self.positions[symbol] = {
-                            'side': 'long',
-                            'entry_price': current_price,
-                            'amount': position_size / current_price,
-                            'size': position_size,
-                            'entry_time': datetime.now(),
-                            'order_id': 'simulated'
-                        }
-                        logger.info(f"📝 Position simulated (testnet): LONG {symbol}")
+                        logger.info(f"Creating limit buy order instead...")
+
+                        try:
+                            # Try limit order at market price
+                            order = self.exchange.create_limit_buy_order(
+                                symbol=symbol,
+                                amount=amount,
+                                price=current_price * 1.001  # Slightly above market for quick fill
+                            )
+
+                            logger.info(f"✅ LIMIT BUY ORDER PLACED: {symbol}")
+                            logger.info(f"   Order ID: {order['id']}")
+
+                            self.positions[symbol] = {
+                                'side': 'long',
+                                'entry_price': current_price,
+                                'amount': amount,
+                                'entry_time': datetime.now(),
+                                'order_id': order['id']
+                            }
+
+                        except Exception as e2:
+                            logger.error(f"Limit order also failed: {e2}")
 
             elif signal == 'SELL':
                 if len(self.positions) < self.config['max_positions']:
-                    position_size = self.calculate_position_size(symbol, current_price)
-                    amount = position_size / current_price
+                    amount = self.calculate_position_size(symbol, current_price)
 
-                    logger.info(f"🔴 EXECUTING SELL ORDER: {symbol}")
-                    logger.info(f"   Amount: {amount:.6f} | Value: ${position_size:.2f}")
+                    logger.info(f"🔴 PLACING SELL ORDER: {symbol}")
+                    logger.info(f"   Amount: {amount:.8f} | Price: ${current_price:.2f}")
 
                     try:
-                        # For short selling (not available on spot, simulate it)
+                        # For spot trading, we need to have the asset first
+                        # So we'll simulate a short by selling what we don't have
+                        # In real trading, this would require margin trading
+
+                        # First, try to sell if we have the base currency
+                        base_currency = symbol.split('/')[0]
+                        balance = self.exchange.fetch_balance()
+
+                        if base_currency in balance and balance[base_currency]['free'] >= amount:
+                            order = self.exchange.create_market_sell_order(
+                                symbol=symbol,
+                                amount=amount
+                            )
+
+                            logger.info(f"✅ SELL ORDER EXECUTED: {symbol}")
+                            logger.info(f"   Order ID: {order['id']}")
+
+                        else:
+                            # Place limit sell order for testing
+                            order = self.exchange.create_limit_sell_order(
+                                symbol=symbol,
+                                amount=amount,
+                                price=current_price * 0.999  # Slightly below market
+                            )
+
+                            logger.info(f"✅ LIMIT SELL ORDER PLACED: {symbol}")
+                            logger.info(f"   Order ID: {order['id']}")
+
                         self.positions[symbol] = {
                             'side': 'short',
                             'entry_price': current_price,
                             'amount': amount,
-                            'size': position_size,
                             'entry_time': datetime.now(),
-                            'order_id': 'short_simulated'
+                            'order_id': order.get('id', 'simulated')
                         }
 
-                        logger.info(f"📝 SHORT position simulated: {symbol} @ ${current_price:.2f}")
-
                     except Exception as e:
-                        logger.error(f"❌ Order failed: {e}")
+                        logger.error(f"❌ Sell order failed: {e}")
+                        # Track as simulated short
+                        self.positions[symbol] = {
+                            'side': 'short',
+                            'entry_price': current_price,
+                            'amount': amount,
+                            'entry_time': datetime.now(),
+                            'order_id': 'simulated_short'
+                        }
 
             elif signal in ['EXIT_LONG', 'EXIT_SHORT'] and symbol in self.positions:
                 position = self.positions[symbol]
-                entry_price = position['entry_price']
                 amount = position['amount']
+                entry_price = position['entry_price']
+
+                logger.info(f"🏁 CLOSING POSITION: {symbol}")
+
+                try:
+                    if position['side'] == 'long':
+                        # Sell to close long position
+                        order = self.exchange.create_market_sell_order(
+                            symbol=symbol,
+                            amount=amount
+                        )
+                        logger.info(f"✅ SELL ORDER EXECUTED (closing long): {symbol}")
+
+                    else:  # short
+                        # Buy to close short position
+                        order = self.exchange.create_market_buy_order(
+                            symbol=symbol,
+                            amount=amount
+                        )
+                        logger.info(f"✅ BUY ORDER EXECUTED (closing short): {symbol}")
+
+                    logger.info(f"   Order ID: {order['id']}")
+
+                except Exception as e:
+                    logger.error(f"Failed to close position: {e}")
+                    order = {'id': 'close_failed'}
 
                 # Calculate PnL
                 if position['side'] == 'long':
                     pnl = (current_price - entry_price) * amount
                     pnl_pct = ((current_price - entry_price) / entry_price) * 100
-
-                    logger.info(f"🏁 CLOSING LONG POSITION: {symbol}")
-
-                    try:
-                        # Sell to close long position
-                        order = self.exchange.create_market_sell_order(symbol, amount)
-                        logger.info(f"✅ SELL ORDER FILLED: {symbol} @ ${current_price:.2f}")
-                    except:
-                        logger.info(f"📝 Position close simulated (testnet)")
-
-                else:  # short
+                else:
                     pnl = (entry_price - current_price) * amount
                     pnl_pct = ((entry_price - current_price) / entry_price) * 100
-                    logger.info(f"🏁 CLOSING SHORT POSITION: {symbol}")
-                    logger.info(f"📝 Position close simulated (testnet)")
 
-                # Update total PnL
                 self.total_pnl += pnl
 
-                # Log PnL with color
                 pnl_color = Fore.GREEN if pnl > 0 else Fore.RED
                 logger.info(f"{pnl_color}   PnL: ${pnl:.2f} ({pnl_pct:+.2f}%)")
                 logger.info(f"   Total PnL: ${self.total_pnl:.2f}")
@@ -387,13 +470,28 @@ class StatArbBot:
                     f"{side_emoji} {symbol}: {pos['side'].upper()} | "
                     f"Entry: ${pos['entry_price']:.2f} | "
                     f"Current: ${current_price:.2f} | "
+                    f"Amount: {pos['amount']:.8f} | "
                     f"{pnl_color}PnL: ${pnl:.2f} ({pnl_pct:+.2f}%){Style.RESET_ALL}"
                 )
+
+                if pos.get('order_id') and pos['order_id'] not in ['simulated', 'simulated_short']:
+                    logger.info(f"   Order ID: {pos['order_id']}")
+
+    def check_open_orders(self):
+        """Check status of open orders on testnet"""
+        try:
+            open_orders = self.exchange.fetch_open_orders()
+            if open_orders:
+                logger.info(f"📋 Open Orders: {len(open_orders)}")
+                for order in open_orders:
+                    logger.info(f"   {order['symbol']}: {order['side']} {order['amount']} @ {order['price']}")
+        except Exception as e:
+            logger.debug(f"Could not fetch open orders: {e}")
 
     def run(self):
         """Main bot loop"""
         logger.info("=" * 60)
-        logger.info("🤖 STATISTICAL ARBITRAGE BOT - LIVE TRADING")
+        logger.info("🤖 STATISTICAL ARBITRAGE BOT - TESTNET TRADING")
         logger.info("=" * 60)
         logger.info(f"📍 Exchange: Binance Testnet")
         logger.info(f"📈 Trading Pairs: {', '.join(self.config['trading_pairs'])}")
@@ -403,6 +501,8 @@ class StatArbBot:
         logger.info(f"🏁 Exit Z-Score: ±{self.config['exit_threshold']}")
         logger.info(f"🛑 Stop Loss: {self.config['stop_loss']*100:.1f}%")
         logger.info(f"💰 Take Profit: {self.config['take_profit']*100:.1f}%")
+        logger.info("=" * 60)
+        logger.info("📌 Check your orders at: https://testnet.binance.vision/")
         logger.info("=" * 60)
 
         iteration = 0
@@ -426,6 +526,9 @@ class StatArbBot:
                 # Display current positions
                 self.display_positions()
 
+                # Check open orders
+                self.check_open_orders()
+
                 # Show total PnL
                 if self.total_pnl != 0:
                     pnl_color = Fore.GREEN if self.total_pnl > 0 else Fore.RED
@@ -433,6 +536,7 @@ class StatArbBot:
 
                 # Show next update timer
                 logger.info(f"\n⏳ Next update in {self.config['update_interval']} seconds...")
+                logger.info(f"📌 Check orders at: https://testnet.binance.vision/")
 
                 # Wait for next update
                 time.sleep(self.config['update_interval'])
@@ -443,6 +547,14 @@ class StatArbBot:
                 logger.info("=" * 60)
                 logger.info(f"Total trades executed: {len(self.trades_executed)}")
                 logger.info(f"Final P&L: ${self.total_pnl:.2f}")
+
+                # Cancel any open orders
+                try:
+                    self.exchange.cancel_all_orders()
+                    logger.info("Cancelled all open orders")
+                except:
+                    pass
+
                 break
 
             except Exception as e:

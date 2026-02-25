@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { NavHeader } from "@/components/layout/nav-header";
 import { DatabaseService, StrategyDeployment, Position, Trade } from "@/lib/supabase";
 import DeploymentModal from "@/components/DeploymentModal";
+import EC2Monitor from "@/components/EC2Monitor";
 
 type Environment = 'paper' | 'live';
 type StrategyStatus = 'stopped' | 'running' | 'paused' | 'error';
@@ -1104,7 +1105,18 @@ export default function ExecutionPage() {
           </div>
         </div>
 
-        {/* 3. Positions & Orders */}
+        {/* 3. EC2 Instance Monitor */}
+        <div className="mb-6">
+          <EC2Monitor onConnectionChange={(connected) => {
+            if (connected) {
+              addLog('SYSTEM', 'Connected to EC2 instance', 'info');
+            } else {
+              addLog('SYSTEM', 'Disconnected from EC2 instance', 'warning');
+            }
+          }} />
+        </div>
+
+        {/* 4. Positions & Orders */}
         <div className="grid grid-cols-2 gap-6 mb-6">
           {/* Open Positions */}
           <div className="bg-white border border-neutral-200 rounded-lg p-6">
