@@ -366,11 +366,12 @@ class StatArbBot:
                         timeout=1.0
                     )
 
-                    # Execute the trade (session managed by ExecutionEngine)
-                    result = await self.execution_engine._execute_trade(trade)
-                    if result:
-                        logger.info(f"✅ ORDER EXECUTED: {result['symbol']} {result['side']}")
-                        self.order_ids.append(result.get('orderId', 'unknown'))
+                    # Execute the trade with proper session context
+                    async with self.client:
+                        result = await self.execution_engine._execute_trade(trade)
+                        if result:
+                            logger.info(f"✅ ORDER EXECUTED: {result['symbol']} {result['side']}")
+                            self.order_ids.append(result.get('orderId', 'unknown'))
 
                     self.execution_engine.order_queue.task_done()
 
