@@ -59,16 +59,22 @@ class StatArbBot:
                 'defaultType': 'spot',
                 'adjustForTimeDifference': True,
                 'recvWindow': 60000,
+                'test': True,  # Enable test mode
             }
         })
 
-        # Set sandbox mode for testnet
-        self.exchange.set_sandbox_mode(True)
+        # Manually set testnet URLs - DO NOT use set_sandbox_mode as it causes issues
+        self.exchange.urls['api'] = {
+            'public': 'https://testnet.binance.vision/api/v3',
+            'private': 'https://testnet.binance.vision/api/v3',
+            'web': 'https://testnet.binance.vision',
+        }
 
-        # Override only the spot API URLs for testnet
-        if hasattr(self.exchange, 'urls') and 'api' in self.exchange.urls:
-            self.exchange.urls['api']['public'] = 'https://testnet.binance.vision/api/v3'
-            self.exchange.urls['api']['private'] = 'https://testnet.binance.vision/api/v3'
+        # Set base URL
+        self.exchange.urls['base'] = 'https://testnet.binance.vision'
+
+        # Important: Set hostname for signature generation
+        self.exchange.hostname = 'testnet.binance.vision'
 
         # Load markets
         logger.info("Loading market data...")
@@ -236,11 +242,12 @@ class StatArbBot:
             amount = self.exchange.amount_to_precision(symbol, amount)
 
             # Ensure we meet minimum requirements
-            if amount < min_amount:
+            if float(amount) < float(min_amount) if min_amount else False:
                 amount = min_amount
 
-            if amount * price < min_cost:
-                amount = min_cost / price
+            min_cost_value = float(min_cost) if min_cost else 10.0
+            if float(amount) * price < min_cost_value:
+                amount = min_cost_value / price
                 amount = self.exchange.amount_to_precision(symbol, amount)
 
             return float(amount)
