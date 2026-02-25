@@ -295,9 +295,12 @@ class BinanceClient:
             'symbol': symbol,
             'side': side,
             'type': order_type,
-            'quantity': str(quantity),
-            'timeInForce': time_in_force
+            'quantity': str(quantity)
         }
+
+        # Only add timeInForce for non-MARKET orders
+        if order_type != "MARKET":
+            params['timeInForce'] = time_in_force
 
         if price:
             params['price'] = str(price)
