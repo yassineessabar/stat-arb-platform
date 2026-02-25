@@ -62,16 +62,13 @@ class StatArbBot:
             }
         })
 
-        # Set testnet URLs
+        # Set sandbox mode for testnet
         self.exchange.set_sandbox_mode(True)
 
-        # Override URLs for testnet
-        self.exchange.urls['api'] = {
-            'public': 'https://testnet.binance.vision/api/v3',
-            'private': 'https://testnet.binance.vision/api/v3',
-            'fapiPublic': 'https://testnet.binancefuture.com/fapi/v1',
-            'fapiPrivate': 'https://testnet.binancefuture.com/fapi/v1',
-        }
+        # Override only the spot API URLs for testnet
+        if hasattr(self.exchange, 'urls') and 'api' in self.exchange.urls:
+            self.exchange.urls['api']['public'] = 'https://testnet.binance.vision/api/v3'
+            self.exchange.urls['api']['private'] = 'https://testnet.binance.vision/api/v3'
 
         # Load markets
         logger.info("Loading market data...")
