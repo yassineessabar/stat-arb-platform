@@ -50,23 +50,27 @@ class StatArbBot:
         logger.info("🚀 INITIALIZING STATISTICAL ARBITRAGE BOT")
         logger.info("=" * 60)
 
-        # Initialize Binance Testnet for Futures trading (like the working script)
+        # Use direct API configuration like working script - no CCXT sandbox mode
+        import hmac
+        import hashlib
+        from urllib.parse import urlencode
+
+        self.api_key = self.config['api_key']
+        self.api_secret = self.config['api_secret']
+        self.base_url = 'https://testnet.binance.vision'
+
+        # Also keep CCXT for price fetching only
         self.exchange = ccxt.binance({
             'apiKey': self.config['api_key'],
             'secret': self.config['api_secret'],
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'future',  # Use futures like working script
-                'adjustForTimeDifference': True,
+                'defaultType': 'spot',
             }
         })
 
-        # Set sandbox mode for futures testnet
-        self.exchange.set_sandbox_mode(True)
-
-        # Use Futures testnet URLs (same as working script)
-        self.exchange.urls['api']['public'] = 'https://testnet.binancefuture.com/fapi/v1'
-        self.exchange.urls['api']['private'] = 'https://testnet.binancefuture.com/fapi/v1'
+        # Override URLs for price fetching
+        self.exchange.urls['api']['public'] = 'https://testnet.binance.vision/api/v3'
 
         # Load markets
         logger.info("Loading market data...")
@@ -85,15 +89,62 @@ class StatArbBot:
         # Get account balance
         self.check_balance()
 
-    def check_balance(self):
-        """Check and display account balance"""
-        try:
-            balance = self.exchange.fetch_balance()
+    def _sign_request(self, params):
+        """Sign request like working script"""
+        import hmac
+        import hashlib
+        from urllib.parse import urlencode
 
-            # Check USDT balance
-            usdt_balance = balance['USDT']['free'] if 'USDT' in balance else 0
-            btc_balance = balance['BTC']['free'] if 'BTC' in balance else 0
-            eth_balance = balance['ETH']['free'] if 'ETH' in balance else 0
+        query_string = urlencode(params)
+        return hmac.new(
+            self.api_secret.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
+    def _make_request(self, endpoint, params=None, method='GET'):
+        """Make direct API request to testnet"""
+        import time
+        import requests
+
+        if params is None:
+            params = {}
+
+        # Add timestamp and signature for private endpoints
+        if '/api/v3/account' in endpoint or '/api/v3/order' in endpoint:
+            params['timestamp'] = int(time.time() * 1000)
+            params['recvWindow'] = 60000
+            params['signature'] = self._sign_request(params)
+
+        url = f"{self.base_url}{endpoint}"
+        headers = {'X-MBX-APIKEY': self.api_key}
+
+        if method == 'GET':
+            response = requests.get(url, params=params, headers=headers)
+        elif method == 'POST':
+            response = requests.post(url, data=params, headers=headers)
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise Exception(f"API Error: {response.status_code} {response.text}")
+
+    def check_balance(self):
+        """Check and display account balance using direct API"""
+        try:
+            account = self._make_request('/api/v3/account')
+
+            usdt_balance = 0
+            btc_balance = 0
+            eth_balance = 0
+
+            for balance in account.get('balances', []):
+                if balance['asset'] == 'USDT':
+                    usdt_balance = float(balance['free'])
+                elif balance['asset'] == 'BTC':
+                    btc_balance = float(balance['free'])
+                elif balance['asset'] == 'ETH':
+                    eth_balance = float(balance['free'])
 
             logger.info(f"💰 Account Balances:")
             logger.info(f"   USDT: {usdt_balance:.2f}")
@@ -267,52 +318,69 @@ class StatArbBot:
                     logger.info(f"   Amount: {amount:.8f} | Price: ${current_price:.2f}")
 
                     try:
-                        # Place REAL market buy order on testnet
-                        order = self.exchange.create_market_buy_order(
-                            symbol=symbol,
-                            amount=amount
-                        )
+                        # Place REAL market buy order using direct API
+                        order_params = {
+                            'symbol': symbol.replace('/', ''),  # Remove slash for API
+                            'side': 'BUY',
+                            'type': 'MARKET',
+                            'quoteOrderQty': position_size,  # Buy with USDT amount
+                        }
+
+                        order = self._make_request('/api/v3/order', order_params, 'POST')
 
                         logger.info(f"✅ BUY ORDER EXECUTED: {symbol}")
-                        logger.info(f"   Order ID: {order['id']}")
+                        logger.info(f"   Order ID: {order['orderId']}")
                         logger.info(f"   Status: {order['status']}")
-                        logger.info(f"   Filled: {order.get('filled', amount)}")
+                        logger.info(f"   Executed Qty: {order.get('executedQty', 'N/A')}")
 
                         self.positions[symbol] = {
                             'side': 'long',
                             'entry_price': current_price,
                             'amount': amount,
                             'entry_time': datetime.now(),
-                            'order_id': order['id']
+                            'order_id': order['orderId']
                         }
 
-                        self.order_ids.append(order['id'])
+                        self.order_ids.append(order['orderId'])
 
                     except Exception as e:
-                        logger.error(f"❌ Order failed: {e}")
-                        logger.info(f"Creating limit buy order instead...")
+                        logger.error(f"❌ Market order failed: {e}")
 
                         try:
                             # Try limit order at market price
-                            order = self.exchange.create_limit_buy_order(
-                                symbol=symbol,
-                                amount=amount,
-                                price=current_price * 1.001  # Slightly above market for quick fill
-                            )
+                            order_params = {
+                                'symbol': symbol.replace('/', ''),
+                                'side': 'BUY',
+                                'type': 'LIMIT',
+                                'timeInForce': 'GTC',
+                                'quantity': f"{amount:.8f}",
+                                'price': f"{current_price * 1.001:.8f}",  # Slightly above market
+                            }
+
+                            order = self._make_request('/api/v3/order', order_params, 'POST')
 
                             logger.info(f"✅ LIMIT BUY ORDER PLACED: {symbol}")
-                            logger.info(f"   Order ID: {order['id']}")
+                            logger.info(f"   Order ID: {order['orderId']}")
 
                             self.positions[symbol] = {
                                 'side': 'long',
                                 'entry_price': current_price,
                                 'amount': amount,
                                 'entry_time': datetime.now(),
-                                'order_id': order['id']
+                                'order_id': order['orderId']
                             }
 
                         except Exception as e2:
-                            logger.error(f"Limit order also failed: {e2}")
+                            logger.error(f"❌ Limit order also failed: {e2}")
+                            # Create simulated position as fallback
+                            self.positions[symbol] = {
+                                'side': 'long',
+                                'entry_price': current_price,
+                                'amount': amount,
+                                'entry_time': datetime.now(),
+                                'order_id': 'simulated'
+                            }
+                            logger.info(f"📝 Position simulated: LONG {symbol}")
 
             elif signal == 'SELL':
                 if len(self.positions) < self.config['max_positions']:
