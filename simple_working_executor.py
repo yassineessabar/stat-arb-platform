@@ -87,11 +87,14 @@ class SimpleBinanceClient:
     def place_order(self, symbol: str, side: str, quantity: float) -> dict:
         """Place a REAL futures market order"""
         try:
+            # Get correct precision for each symbol
+            precision = self.get_symbol_precision(symbol)
+
             params = {
                 'symbol': symbol,
                 'side': side,
                 'type': 'MARKET',
-                'quantity': f"{quantity:.3f}",  # Use 3 decimal places for futures
+                'quantity': f"{quantity:.{precision}f}",
                 'timestamp': int(time.time() * 1000)
             }
 
@@ -114,6 +117,15 @@ class SimpleBinanceClient:
         except Exception as e:
             logger.error(f"Error placing order: {e}")
             return None
+
+    def get_symbol_precision(self, symbol: str) -> int:
+        """Get the correct quantity precision for each symbol"""
+        symbol_precisions = {
+            'BTCUSDT': 3,   # BTC futures use 3 decimal places
+            'ETHUSDT': 3,   # ETH futures use 3 decimal places
+            'BNBUSDT': 2,   # BNB futures use 2 decimal places
+        }
+        return symbol_precisions.get(symbol, 3)  # Default to 3 if unknown
 
 class SimpleStatArbBot:
     def __init__(self, config_file='strategy_config.json'):
@@ -218,8 +230,22 @@ class SimpleStatArbBot:
 
                 # Calculate minimum quantity for futures ($100 minimum)
                 price = self.client.get_price(symbol.replace('/', ''))
-                quantity = max(100 / price, 0.001) if price > 0 else 0.001
-                quantity = round(quantity, 3)  # Round to 3 decimal places for futures
+                symbol_name = symbol.replace('/', '')
+
+                # Ensure minimum $100 notional value
+                min_notional = 100.0
+                min_quantity = min_notional / price if price > 0 else 0.001
+
+                # Get symbol-specific precision and apply it
+                precision = self.client.get_symbol_precision(symbol_name)
+                quantity = round(min_quantity, precision)
+
+                # Double check that notional meets minimum after rounding
+                notional_value = quantity * price
+                if notional_value < min_notional and price > 0:
+                    # Add one unit in the smallest precision to ensure we meet minimum
+                    quantity += 10 ** (-precision)
+                    quantity = round(quantity, precision)
 
                 # Place REAL order
                 order = self.client.place_order(symbol.replace('/', ''), 'BUY', quantity)
@@ -238,8 +264,22 @@ class SimpleStatArbBot:
 
                 # Calculate minimum quantity for futures ($100 minimum)
                 price = self.client.get_price(symbol.replace('/', ''))
-                quantity = max(100 / price, 0.001) if price > 0 else 0.001
-                quantity = round(quantity, 3)  # Round to 3 decimal places for futures
+                symbol_name = symbol.replace('/', '')
+
+                # Ensure minimum $100 notional value
+                min_notional = 100.0
+                min_quantity = min_notional / price if price > 0 else 0.001
+
+                # Get symbol-specific precision and apply it
+                precision = self.client.get_symbol_precision(symbol_name)
+                quantity = round(min_quantity, precision)
+
+                # Double check that notional meets minimum after rounding
+                notional_value = quantity * price
+                if notional_value < min_notional and price > 0:
+                    # Add one unit in the smallest precision to ensure we meet minimum
+                    quantity += 10 ** (-precision)
+                    quantity = round(quantity, precision)
 
                 # Place REAL order
                 order = self.client.place_order(symbol.replace('/', ''), 'SELL', quantity)
