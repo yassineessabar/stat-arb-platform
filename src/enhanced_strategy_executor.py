@@ -50,39 +50,28 @@ class StatArbBot:
         logger.info("🚀 INITIALIZING STATISTICAL ARBITRAGE BOT")
         logger.info("=" * 60)
 
-        # Initialize Binance Testnet with proper configuration
+        # Initialize Binance Testnet with simple configuration
         self.exchange = ccxt.binance({
             'apiKey': self.config['api_key'],
             'secret': self.config['api_secret'],
             'enableRateLimit': True,
             'options': {
-                'defaultType': 'spot',
+                'defaultType': 'spot',  # Only spot trading
                 'adjustForTimeDifference': True,
-                'recvWindow': 60000,
-                'test': True,  # Enable test mode
             }
         })
 
-        # Manually set testnet URLs - DO NOT use set_sandbox_mode as it causes issues
-        self.exchange.urls['api'] = {
-            'public': 'https://testnet.binance.vision/api/v3',
-            'private': 'https://testnet.binance.vision/api/v3',
-            'web': 'https://testnet.binance.vision',
-            'sapi': 'https://testnet.binance.vision/sapi/v1',
-            'sapiV2': 'https://testnet.binance.vision/sapi/v2',
-            'sapiV3': 'https://testnet.binance.vision/sapi/v3',
-            'sapiV4': 'https://testnet.binance.vision/sapi/v4',
-        }
+        # Set testnet mode properly
+        self.exchange.set_sandbox_mode(True)
 
-        # Set base URL
-        self.exchange.urls['base'] = 'https://testnet.binance.vision'
+        # Override ONLY what's needed for testnet spot trading
+        self.exchange.urls['api']['public'] = 'https://testnet.binance.vision/api/v3'
+        self.exchange.urls['api']['private'] = 'https://testnet.binance.vision/api/v3'
 
-        # Important: Set hostname for signature generation
-        self.exchange.hostname = 'testnet.binance.vision'
-
-        # Disable features that don't work on testnet
-        self.exchange.options['fetchCurrencies'] = False
-        self.exchange.options['warnOnFetchCurrenciesWithoutParams'] = False
+        # Disable all margin/futures/staking features that don't exist on testnet
+        self.exchange.has['margin'] = False
+        self.exchange.has['future'] = False
+        self.exchange.has['option'] = False
 
         # Load markets
         logger.info("Loading market data...")
