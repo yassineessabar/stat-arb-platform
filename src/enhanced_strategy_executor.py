@@ -68,6 +68,10 @@ class StatArbBot:
             'public': 'https://testnet.binance.vision/api/v3',
             'private': 'https://testnet.binance.vision/api/v3',
             'web': 'https://testnet.binance.vision',
+            'sapi': 'https://testnet.binance.vision/sapi/v1',
+            'sapiV2': 'https://testnet.binance.vision/sapi/v2',
+            'sapiV3': 'https://testnet.binance.vision/sapi/v3',
+            'sapiV4': 'https://testnet.binance.vision/sapi/v4',
         }
 
         # Set base URL
@@ -75,6 +79,10 @@ class StatArbBot:
 
         # Important: Set hostname for signature generation
         self.exchange.hostname = 'testnet.binance.vision'
+
+        # Disable features that don't work on testnet
+        self.exchange.options['fetchCurrencies'] = False
+        self.exchange.options['warnOnFetchCurrenciesWithoutParams'] = False
 
         # Load markets
         logger.info("Loading market data...")
