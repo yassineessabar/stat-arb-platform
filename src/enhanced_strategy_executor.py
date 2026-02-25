@@ -295,7 +295,7 @@ class StatArbBot:
                 return
 
             current_price = price_data['price']
-            position_size_usd = self.config.get('position_size', 100)  # Default $100
+            position_size_usd = max(self.config.get('position_size', 100), 100)  # Minimum $100 for Futures
 
             # Set target positions based on signal using ExecutionEngine
             if signal == 'BUY':
