@@ -215,23 +215,28 @@ class StatArbBot:
             signal = 'HOLD'
             signal_emoji = '⏸️'
 
+            # Use v6 parameters if available, otherwise fall back to standard
+            entry_threshold = self.config.get('v6_parameters', {}).get('z_entry', self.config['entry_threshold'])
+            exit_long = self.config.get('v6_parameters', {}).get('z_exit_long', self.config['exit_threshold'])
+            exit_short = self.config.get('v6_parameters', {}).get('z_exit_short', self.config['exit_threshold'])
+
             if symbol not in self.positions:
-                if zscore < -self.config['entry_threshold']:
+                if zscore < -entry_threshold:
                     signal = 'BUY'
                     signal_emoji = '🟢'
                     signals[symbol] = signal
-                elif zscore > self.config['entry_threshold']:
+                elif zscore > entry_threshold:
                     signal = 'SELL'
                     signal_emoji = '🔴'
                     signals[symbol] = signal
             else:
-                # Check exit conditions
+                # Check exit conditions with v6 parameters
                 position = self.positions[symbol]
-                if position['side'] == 'long' and zscore > -self.config['exit_threshold']:
+                if position['side'] == 'long' and zscore > -exit_long:
                     signal = 'EXIT_LONG'
                     signal_emoji = '🏁'
                     signals[symbol] = signal
-                elif position['side'] == 'short' and zscore < self.config['exit_threshold']:
+                elif position['side'] == 'short' and zscore < exit_short:
                     signal = 'EXIT_SHORT'
                     signal_emoji = '🏁'
                     signals[symbol] = signal
@@ -474,8 +479,17 @@ class StatArbBot:
         logger.info(f"📈 Trading Pairs: {', '.join(self.config['trading_pairs'])}")
         logger.info(f"⏱️  Update Interval: {self.config['update_interval']}s")
         logger.info(f"📊 Lookback Period: {self.config['lookback_period']}")
-        logger.info(f"🎯 Entry Z-Score: ±{self.config['entry_threshold']}")
-        logger.info(f"🏁 Exit Z-Score: ±{self.config['exit_threshold']}")
+
+        # Display v6 parameters if available
+        if 'v6_parameters' in self.config:
+            v6 = self.config['v6_parameters']
+            logger.info(f"🎯 V6 Entry Z-Score: ±{v6['z_entry']}")
+            logger.info(f"🏁 V6 Exit Z-Score: {v6['z_exit_long']}/{v6['z_exit_short']}")
+            logger.info(f"⚠️  V6 Stop Z-Score: ±{v6['z_stop']}")
+        else:
+            logger.info(f"🎯 Entry Z-Score: ±{self.config['entry_threshold']}")
+            logger.info(f"🏁 Exit Z-Score: ±{self.config['exit_threshold']}")
+
         logger.info(f"🛑 Stop Loss: {self.config['stop_loss']*100:.1f}%")
         logger.info(f"💰 Take Profit: {self.config['take_profit']*100:.1f}%")
         logger.info("=" * 60)
