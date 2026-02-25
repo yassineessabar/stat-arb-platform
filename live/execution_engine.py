@@ -229,10 +229,12 @@ class ExecutionEngine:
             # Round to appropriate precision for testnet
             quantity = self._round_quantity(symbol, quantity)
 
-            # Ensure minimum quantity for testnet
-            if quantity < 0.001:
-                quantity = 0.001
-                logger.info(f"Adjusting {symbol} quantity to minimum: {quantity}")
+            # Ensure minimum notional value of $100 for Futures
+            notional_value = quantity * current_price
+            if notional_value < 100:
+                quantity = 100 / current_price
+                quantity = self._round_quantity(symbol, quantity)
+                logger.info(f"Adjusting {symbol} quantity to meet $100 minimum: {quantity} (notional: ${quantity * current_price:.2f})")
 
             if quantity == 0:
                 logger.warning(f"Quantity rounded to zero for {symbol}")
