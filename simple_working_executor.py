@@ -29,11 +29,11 @@ class SimpleBinanceClient:
         self.api_key = api_key
         self.api_secret = api_secret
 
-        # Use SPOT testnet URL like the working version
+        # Use FUTURES testnet URL to match your working API keys
         if testnet:
-            self.base_url = "https://testnet.binance.vision"
+            self.base_url = "https://testnet.binancefuture.com"
         else:
-            self.base_url = "https://api.binance.com"
+            self.base_url = "https://fapi.binance.com"
 
         self.session = requests.Session()
         self.session.headers.update({
@@ -54,7 +54,7 @@ class SimpleBinanceClient:
     def get_price(self, symbol: str) -> float:
         """Get current price for a symbol"""
         try:
-            response = self.session.get(f"{self.base_url}/api/v3/ticker/price", params={'symbol': symbol})
+            response = self.session.get(f"{self.base_url}/fapi/v1/ticker/price", params={'symbol': symbol})
             if response.status_code == 200:
                 return float(response.json()['price'])
             else:
@@ -72,12 +72,10 @@ class SimpleBinanceClient:
             }
             params = self._sign_request(params)
 
-            response = self.session.get(f"{self.base_url}/api/v3/account", params=params)
+            response = self.session.get(f"{self.base_url}/fapi/v2/account", params=params)
             if response.status_code == 200:
                 account = response.json()
-                for balance in account['balances']:
-                    if balance['asset'] == 'USDT' and float(balance['free']) > 0:
-                        logger.info(f"💰 USDT Balance: {balance['free']}")
+                logger.info(f"💰 USDT Balance: {account.get('totalWalletBalance', '0')} USDT")
                 return account
             else:
                 logger.error(f"Failed to get account: {response.text}")
@@ -87,21 +85,21 @@ class SimpleBinanceClient:
             return None
 
     def place_order(self, symbol: str, side: str, quantity: float) -> dict:
-        """Place a REAL spot market order"""
+        """Place a REAL futures market order"""
         try:
             params = {
                 'symbol': symbol,
                 'side': side,
                 'type': 'MARKET',
-                'quantity': f"{quantity:.8f}",
+                'quantity': f"{quantity:.3f}",  # Use 3 decimal places for futures
                 'timestamp': int(time.time() * 1000)
             }
 
             # Sign request
             params = self._sign_request(params)
 
-            # Place REAL order
-            response = self.session.post(f"{self.base_url}/api/v3/order", data=params)
+            # Place REAL futures order
+            response = self.session.post(f"{self.base_url}/fapi/v1/order", data=params)
 
             if response.status_code == 200:
                 order = response.json()
@@ -218,8 +216,10 @@ class SimpleStatArbBot:
             if signal == 'BUY':
                 logger.info(f"🔵 EXECUTING BUY: {symbol}")
 
-                # Calculate small quantity for testing
-                quantity = 0.001  # Small amount for spot testing
+                # Calculate minimum quantity for futures ($100 minimum)
+                price = self.client.get_price(symbol.replace('/', ''))
+                quantity = max(100 / price, 0.001) if price > 0 else 0.001
+                quantity = round(quantity, 3)  # Round to 3 decimal places for futures
 
                 # Place REAL order
                 order = self.client.place_order(symbol.replace('/', ''), 'BUY', quantity)
@@ -236,8 +236,10 @@ class SimpleStatArbBot:
             elif signal == 'SELL':
                 logger.info(f"🔴 EXECUTING SELL: {symbol}")
 
-                # Calculate small quantity for testing
-                quantity = 0.001  # Small amount for spot testing
+                # Calculate minimum quantity for futures ($100 minimum)
+                price = self.client.get_price(symbol.replace('/', ''))
+                quantity = max(100 / price, 0.001) if price > 0 else 0.001
+                quantity = round(quantity, 3)  # Round to 3 decimal places for futures
 
                 # Place REAL order
                 order = self.client.place_order(symbol.replace('/', ''), 'SELL', quantity)
