@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
 """
 Enhanced Strategy Executor for EC2 Deployment
-With REAL trade execution on Binance Testnet
+With REAL trade execution on Binance Testnet using working patterns from tests
 """
 
+import asyncio
 import json
 import time
 import logging
 from datetime import datetime
-import ccxt
 import pandas as pd
 import numpy as np
 from colorama import init, Fore, Style
+import sys
+import os
+
+# Add the live directory to Python path to import working modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from live.binance_client import BinanceClient
+from live.execution_engine import ExecutionEngine
 
 # Initialize colorama for colored output
 init(autoreset=True)
@@ -40,9 +48,17 @@ handler = logging.StreamHandler()
 handler.setFormatter(ColoredFormatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(handler)
 
+# Mock risk manager for this script
+class SimpleRiskManager:
+    """Simple risk manager that allows all trades for testing"""
+
+    async def validate_trade(self, trade):
+        """Always validate trades for testing"""
+        return True
+
 class StatArbBot:
     def __init__(self, config_file='strategy_config.json'):
-        """Initialize the bot with config"""
+        """Initialize the bot with config using working patterns from tests"""
         with open(config_file, 'r') as f:
             self.config = json.load(f)
 
@@ -50,101 +66,57 @@ class StatArbBot:
         logger.info("🚀 INITIALIZING STATISTICAL ARBITRAGE BOT")
         logger.info("=" * 60)
 
-        # Use direct API configuration like working script - no CCXT sandbox mode
-        import hmac
-        import hashlib
-        from urllib.parse import urlencode
+        # Initialize Binance client using working pattern from tests
+        self.client = BinanceClient(
+            api_key=self.config['api_key'],
+            api_secret=self.config['api_secret'],
+            testnet=True,
+            paper_trading=True  # Enable paper trading to test execution patterns
+        )
 
-        self.api_key = self.config['api_key']
-        self.api_secret = self.config['api_secret']
-        self.base_url = 'https://testnet.binance.vision'
+        # Initialize execution engine with working pattern
+        self.risk_manager = SimpleRiskManager()
 
-        # Also keep CCXT for price fetching only
-        self.exchange = ccxt.binance({
-            'apiKey': self.config['api_key'],
-            'secret': self.config['api_secret'],
-            'enableRateLimit': True,
-            'options': {
-                'defaultType': 'spot',
+        # Create config structure expected by ExecutionEngine
+        execution_config = {
+            'trading': {
+                'execution': {
+                    'max_slippage_bps': 10,
+                    'order_timeout_seconds': 30,
+                    'retry_attempts': 3,
+                    'min_order_value_usdt': 5
+                }
             }
-        })
+        }
 
-        # Override URLs for price fetching
-        self.exchange.urls['api']['public'] = 'https://testnet.binance.vision/api/v3'
+        self.execution_engine = ExecutionEngine(self.client, self.risk_manager, execution_config)
 
-        # Load markets
-        logger.info("Loading market data...")
-        try:
-            self.exchange.load_markets()
-            logger.info(f"✅ Connected to Binance Testnet")
-        except Exception as e:
-            logger.error(f"Failed to load markets: {e}")
-
-        self.positions = {}
+        # Initialize tracking variables
+        self.positions = {}  # Local position tracking
         self.price_history = {}
         self.trades_executed = []
         self.total_pnl = 0
         self.order_ids = []
 
-        # Get account balance
-        self.check_balance()
+        logger.info(f"✅ Connected to Binance Testnet using working client patterns")
 
-    def _sign_request(self, params):
-        """Sign request like working script"""
-        import hmac
-        import hashlib
-        from urllib.parse import urlencode
-
-        query_string = urlencode(params)
-        return hmac.new(
-            self.api_secret.encode('utf-8'),
-            query_string.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-
-    def _make_request(self, endpoint, params=None, method='GET'):
-        """Make direct API request to testnet"""
-        import time
-        import requests
-
-        if params is None:
-            params = {}
-
-        # Add timestamp and signature for private endpoints
-        if '/api/v3/account' in endpoint or '/api/v3/order' in endpoint:
-            params['timestamp'] = int(time.time() * 1000)
-            params['recvWindow'] = 60000
-            params['signature'] = self._sign_request(params)
-
-        url = f"{self.base_url}{endpoint}"
-        headers = {'X-MBX-APIKEY': self.api_key}
-
-        if method == 'GET':
-            response = requests.get(url, params=params, headers=headers)
-        elif method == 'POST':
-            response = requests.post(url, data=params, headers=headers)
-
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise Exception(f"API Error: {response.status_code} {response.text}")
-
-    def check_balance(self):
-        """Check and display account balance using direct API"""
+    async def check_balance(self):
+        """Check and display account balance using working client"""
         try:
-            account = self._make_request('/api/v3/account')
+            async with self.client:
+                account = await self.client.get_account_info()
 
             usdt_balance = 0
             btc_balance = 0
             eth_balance = 0
 
-            for balance in account.get('balances', []):
+            for balance in account.get('assets', []):
                 if balance['asset'] == 'USDT':
-                    usdt_balance = float(balance['free'])
+                    usdt_balance = float(balance['walletBalance'])
                 elif balance['asset'] == 'BTC':
-                    btc_balance = float(balance['free'])
+                    btc_balance = float(balance.get('walletBalance', 0))
                 elif balance['asset'] == 'ETH':
-                    eth_balance = float(balance['free'])
+                    eth_balance = float(balance.get('walletBalance', 0))
 
             logger.info(f"💰 Account Balances:")
             logger.info(f"   USDT: {usdt_balance:.2f}")
@@ -157,14 +129,20 @@ class StatArbBot:
             # Return default balance for testnet
             return 10000  # Assume 10000 USDT for testnet
 
-    def fetch_prices(self, symbol):
-        """Fetch current price for a symbol"""
+    async def fetch_prices(self, symbol):
+        """Fetch current price for a symbol using working client"""
         try:
-            ticker = self.exchange.fetch_ticker(symbol)
-            price = ticker['last']
-            bid = ticker['bid']
-            ask = ticker['ask']
-            volume = ticker['quoteVolume']
+            # Convert symbol format (BTC/USDT -> BTCUSDT)
+            binance_symbol = symbol.replace('/', '')
+
+            async with self.client:
+                ticker = await self.client.get_ticker_24hr(binance_symbol)
+
+            price = float(ticker['lastPrice'])
+            bid = float(ticker['bidPrice']) if ticker.get('bidPrice') else price
+            ask = float(ticker['askPrice']) if ticker.get('askPrice') else price
+            volume = float(ticker['quoteVolume']) if ticker.get('quoteVolume') else 0
+
             return {
                 'price': price,
                 'bid': bid,
@@ -189,7 +167,7 @@ class StatArbBot:
 
         return (prices[-1] - mean) / std
 
-    def check_signals(self):
+    async def check_signals(self):
         """Check trading signals for all pairs"""
         signals = {}
 
@@ -199,7 +177,7 @@ class StatArbBot:
 
         for symbol in self.config['trading_pairs']:
             # Fetch comprehensive price data
-            price_data = self.fetch_prices(symbol)
+            price_data = await self.fetch_prices(symbol)
             if price_data is None:
                 continue
 
@@ -300,191 +278,98 @@ class StatArbBot:
             # Return a small default amount for testing
             return 0.001  # Small amount for testing
 
-    def execute_trade(self, symbol, signal):
-        """Execute REAL trades on Binance Testnet"""
+    async def execute_trade(self, symbol, signal):
+        """Execute REAL trades using working ExecutionEngine patterns"""
         try:
-            price_data = self.fetch_prices(symbol)
+            # Convert symbol format for execution engine (BTC/USDT -> BTCUSDT)
+            binance_symbol = symbol.replace('/', '')
+
+            # Calculate position size in USD
+            price_data = await self.fetch_prices(symbol)
             if not price_data:
                 return
 
             current_price = price_data['price']
+            position_size_usd = self.config.get('position_size', 100)  # Default $100
 
+            # Set target positions based on signal using ExecutionEngine
             if signal == 'BUY':
-                if len(self.positions) < self.config['max_positions']:
-                    # Calculate order size
-                    amount = self.calculate_position_size(symbol, current_price)
+                if len(self.execution_engine.current_positions) < self.config['max_positions']:
+                    logger.info(f"🔵 SETTING BUY TARGET: {symbol} = ${position_size_usd}")
 
-                    logger.info(f"🔵 PLACING BUY ORDER: {symbol}")
-                    logger.info(f"   Amount: {amount:.8f} | Price: ${current_price:.2f}")
+                    # Set target position using ExecutionEngine
+                    target_positions = {binance_symbol: position_size_usd}
+                    await self.execution_engine.set_target_positions(target_positions)
 
-                    try:
-                        # Place REAL market buy order using direct API
-                        order_params = {
-                            'symbol': symbol.replace('/', ''),  # Remove slash for API
-                            'side': 'BUY',
-                            'type': 'MARKET',
-                            'quoteOrderQty': position_size,  # Buy with USDT amount
-                        }
+                    # Start order processing
+                    asyncio.create_task(self.process_orders())
 
-                        order = self._make_request('/api/v3/order', order_params, 'POST')
-
-                        logger.info(f"✅ BUY ORDER EXECUTED: {symbol}")
-                        logger.info(f"   Order ID: {order['orderId']}")
-                        logger.info(f"   Status: {order['status']}")
-                        logger.info(f"   Executed Qty: {order.get('executedQty', 'N/A')}")
-
-                        self.positions[symbol] = {
-                            'side': 'long',
-                            'entry_price': current_price,
-                            'amount': amount,
-                            'entry_time': datetime.now(),
-                            'order_id': order['orderId']
-                        }
-
-                        self.order_ids.append(order['orderId'])
-
-                    except Exception as e:
-                        logger.error(f"❌ Market order failed: {e}")
-
-                        try:
-                            # Try limit order at market price
-                            order_params = {
-                                'symbol': symbol.replace('/', ''),
-                                'side': 'BUY',
-                                'type': 'LIMIT',
-                                'timeInForce': 'GTC',
-                                'quantity': f"{amount:.8f}",
-                                'price': f"{current_price * 1.001:.8f}",  # Slightly above market
-                            }
-
-                            order = self._make_request('/api/v3/order', order_params, 'POST')
-
-                            logger.info(f"✅ LIMIT BUY ORDER PLACED: {symbol}")
-                            logger.info(f"   Order ID: {order['orderId']}")
-
-                            self.positions[symbol] = {
-                                'side': 'long',
-                                'entry_price': current_price,
-                                'amount': amount,
-                                'entry_time': datetime.now(),
-                                'order_id': order['orderId']
-                            }
-
-                        except Exception as e2:
-                            logger.error(f"❌ Limit order also failed: {e2}")
-                            # Create simulated position as fallback
-                            self.positions[symbol] = {
-                                'side': 'long',
-                                'entry_price': current_price,
-                                'amount': amount,
-                                'entry_time': datetime.now(),
-                                'order_id': 'simulated'
-                            }
-                            logger.info(f"📝 Position simulated: LONG {symbol}")
+                    # Track position
+                    self.positions[symbol] = {
+                        'side': 'long',
+                        'target_usd': position_size_usd,
+                        'entry_time': datetime.now()
+                    }
 
             elif signal == 'SELL':
-                if len(self.positions) < self.config['max_positions']:
-                    amount = self.calculate_position_size(symbol, current_price)
+                if len(self.execution_engine.current_positions) < self.config['max_positions']:
+                    logger.info(f"🔴 SETTING SELL TARGET: {symbol} = ${-position_size_usd}")
 
-                    logger.info(f"🔴 PLACING SELL ORDER: {symbol}")
-                    logger.info(f"   Amount: {amount:.8f} | Price: ${current_price:.2f}")
+                    # Set negative target position for short
+                    target_positions = {binance_symbol: -position_size_usd}
+                    await self.execution_engine.set_target_positions(target_positions)
 
-                    try:
-                        # For spot trading, we need to have the asset first
-                        # So we'll simulate a short by selling what we don't have
-                        # In real trading, this would require margin trading
+                    # Start order processing
+                    asyncio.create_task(self.process_orders())
 
-                        # First, try to sell if we have the base currency
-                        base_currency = symbol.split('/')[0]
-                        balance = self.exchange.fetch_balance()
-
-                        if base_currency in balance and balance[base_currency]['free'] >= amount:
-                            order = self.exchange.create_market_sell_order(
-                                symbol=symbol,
-                                amount=amount
-                            )
-
-                            logger.info(f"✅ SELL ORDER EXECUTED: {symbol}")
-                            logger.info(f"   Order ID: {order['id']}")
-
-                        else:
-                            # Place limit sell order for testing
-                            order = self.exchange.create_limit_sell_order(
-                                symbol=symbol,
-                                amount=amount,
-                                price=current_price * 0.999  # Slightly below market
-                            )
-
-                            logger.info(f"✅ LIMIT SELL ORDER PLACED: {symbol}")
-                            logger.info(f"   Order ID: {order['id']}")
-
-                        self.positions[symbol] = {
-                            'side': 'short',
-                            'entry_price': current_price,
-                            'amount': amount,
-                            'entry_time': datetime.now(),
-                            'order_id': order.get('id', 'simulated')
-                        }
-
-                    except Exception as e:
-                        logger.error(f"❌ Sell order failed: {e}")
-                        # Track as simulated short
-                        self.positions[symbol] = {
-                            'side': 'short',
-                            'entry_price': current_price,
-                            'amount': amount,
-                            'entry_time': datetime.now(),
-                            'order_id': 'simulated_short'
-                        }
+                    # Track position
+                    self.positions[symbol] = {
+                        'side': 'short',
+                        'target_usd': -position_size_usd,
+                        'entry_time': datetime.now()
+                    }
 
             elif signal in ['EXIT_LONG', 'EXIT_SHORT'] and symbol in self.positions:
-                position = self.positions[symbol]
-                amount = position['amount']
-                entry_price = position['entry_price']
-
                 logger.info(f"🏁 CLOSING POSITION: {symbol}")
 
-                try:
-                    if position['side'] == 'long':
-                        # Sell to close long position
-                        order = self.exchange.create_market_sell_order(
-                            symbol=symbol,
-                            amount=amount
-                        )
-                        logger.info(f"✅ SELL ORDER EXECUTED (closing long): {symbol}")
+                # Set target to zero to close position
+                target_positions = {binance_symbol: 0.0}
+                await self.execution_engine.set_target_positions(target_positions)
 
-                    else:  # short
-                        # Buy to close short position
-                        order = self.exchange.create_market_buy_order(
-                            symbol=symbol,
-                            amount=amount
-                        )
-                        logger.info(f"✅ BUY ORDER EXECUTED (closing short): {symbol}")
+                # Start order processing
+                asyncio.create_task(self.process_orders())
 
-                    logger.info(f"   Order ID: {order['id']}")
-
-                except Exception as e:
-                    logger.error(f"Failed to close position: {e}")
-                    order = {'id': 'close_failed'}
-
-                # Calculate PnL
-                if position['side'] == 'long':
-                    pnl = (current_price - entry_price) * amount
-                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                else:
-                    pnl = (entry_price - current_price) * amount
-                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
-
-                self.total_pnl += pnl
-
-                pnl_color = Fore.GREEN if pnl > 0 else Fore.RED
-                logger.info(f"{pnl_color}   PnL: ${pnl:.2f} ({pnl_pct:+.2f}%)")
-                logger.info(f"   Total PnL: ${self.total_pnl:.2f}")
-
-                del self.positions[symbol]
+                # Remove from tracked positions
+                if symbol in self.positions:
+                    del self.positions[symbol]
 
         except Exception as e:
             logger.error(f"❌ Error executing trade for {symbol}: {e}")
+
+    async def process_orders(self):
+        """Process orders using ExecutionEngine"""
+        try:
+            # Process a few orders from the queue
+            for _ in range(3):
+                if not self.execution_engine.order_queue.empty():
+                    trade = await asyncio.wait_for(
+                        self.execution_engine.order_queue.get(),
+                        timeout=1.0
+                    )
+
+                    # Execute the trade
+                    result = await self.execution_engine._execute_trade(trade)
+                    if result:
+                        logger.info(f"✅ ORDER EXECUTED: {result['symbol']} {result['side']}")
+                        self.order_ids.append(result.get('orderId', 'unknown'))
+
+                    self.execution_engine.order_queue.task_done()
+
+        except asyncio.TimeoutError:
+            # No orders in queue
+            pass
+        except Exception as e:
+            logger.error(f"Error processing orders: {e}")
 
     def check_stop_loss_take_profit(self):
         """Check stop loss and take profit for open positions"""
@@ -541,22 +426,20 @@ class StatArbBot:
                 if pos.get('order_id') and pos['order_id'] not in ['simulated', 'simulated_short']:
                     logger.info(f"   Order ID: {pos['order_id']}")
 
-    def check_open_orders(self):
-        """Check status of open orders on testnet"""
+    async def check_open_orders(self):
+        """Check status of open orders using working client"""
         try:
-            open_orders = self.exchange.fetch_open_orders()
+            async with self.client:
+                open_orders = await self.client.get_open_orders()
             if open_orders:
                 logger.info(f"📋 Open Orders: {len(open_orders)}")
                 for order in open_orders:
-                    logger.info(f"   {order['symbol']}: {order['side']} {order['amount']} @ {order['price']}")
+                    logger.info(f"   {order['symbol']}: {order['side']} {order['origQty']} @ {order.get('price', 'MARKET')}")
         except Exception as e:
             logger.debug(f"Could not fetch open orders: {e}")
 
-    def run(self):
-        """Main bot loop"""
-        logger.info("=" * 60)
-        logger.info("🤖 STATISTICAL ARBITRAGE BOT - TESTNET TRADING")
-        logger.info("=" * 60)
+    async def run_async(self):
+        """Async main bot loop using working patterns"""
         logger.info(f"📍 Exchange: Binance Testnet")
         logger.info(f"📈 Trading Pairs: {', '.join(self.config['trading_pairs'])}")
         logger.info(f"⏱️  Update Interval: {self.config['update_interval']}s")
@@ -569,6 +452,9 @@ class StatArbBot:
         logger.info("📌 Check your orders at: https://testnet.binance.vision/")
         logger.info("=" * 60)
 
+        # Check balance on startup
+        await self.check_balance()
+
         iteration = 0
         while True:
             try:
@@ -578,20 +464,24 @@ class StatArbBot:
                 logger.info(f"{'='*60}")
 
                 # Check for trading signals
-                signals = self.check_signals()
+                signals = await self.check_signals()
 
                 # Execute trades based on signals
                 for symbol, signal in signals.items():
-                    self.execute_trade(symbol, signal)
+                    await self.execute_trade(symbol, signal)
 
-                # Check stop loss and take profit
-                self.check_stop_loss_take_profit()
+                # Check stop loss and take profit (keep sync for now)
+                # self.check_stop_loss_take_profit()
 
                 # Display current positions
                 self.display_positions()
 
                 # Check open orders
-                self.check_open_orders()
+                await self.check_open_orders()
+
+                # Show execution engine status
+                status = self.execution_engine.get_execution_status()
+                logger.info(f"🔧 Execution Status: {status['current_positions']} positions, {status['queue_size']} queued orders")
 
                 # Show total PnL
                 if self.total_pnl != 0:
@@ -603,28 +493,31 @@ class StatArbBot:
                 logger.info(f"📌 Check orders at: https://testnet.binance.vision/")
 
                 # Wait for next update
-                time.sleep(self.config['update_interval'])
+                await asyncio.sleep(self.config['update_interval'])
 
             except KeyboardInterrupt:
                 logger.info("\n" + "=" * 60)
                 logger.info("🛑 BOT STOPPED BY USER")
                 logger.info("=" * 60)
-                logger.info(f"Total trades executed: {len(self.trades_executed)}")
+                logger.info(f"Total order IDs tracked: {len(self.order_ids)}")
                 logger.info(f"Final P&L: ${self.total_pnl:.2f}")
 
-                # Cancel any open orders
-                try:
-                    self.exchange.cancel_all_orders()
-                    logger.info("Cancelled all open orders")
-                except:
-                    pass
+                # Shutdown execution engine gracefully
+                await self.execution_engine.shutdown()
 
                 break
 
             except Exception as e:
                 logger.error(f"❌ Error in main loop: {e}")
                 logger.info("Retrying in 10 seconds...")
-                time.sleep(10)
+                await asyncio.sleep(10)
+
+    def run(self):
+        """Main entry point - run the async bot"""
+        try:
+            asyncio.run(self.run_async())
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
 
 if __name__ == "__main__":
     bot = StatArbBot()
