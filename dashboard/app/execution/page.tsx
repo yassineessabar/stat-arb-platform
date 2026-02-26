@@ -811,11 +811,11 @@ export default function ExecutionPage() {
               ⚙️ API Settings
             </button>
             <div className={`px-3 py-1 rounded-full text-xs font-medium ${
-              apiConnected
+              strategyDeployed
                 ? 'bg-green-100 text-green-700'
                 : 'bg-neutral-100 text-neutral-600'
             }`}>
-              {apiConnected ? '● Connected' : '○ Disconnected'}
+              {strategyDeployed ? '● Connected' : '○ Disconnected'}
             </div>
             <div className={`px-3 py-1 rounded-full text-xs font-medium ${
               environment === 'paper'
