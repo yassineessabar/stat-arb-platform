@@ -130,9 +130,9 @@ export async function POST(request: NextRequest) {
       await execWithTimeout(configCommand, 6000);
       console.log('✓ Configuration created');
 
-      // Step 3: Start the strategy - use screen for completely detached execution
+      // Step 3: Start the strategy - use screen with logging
       console.log('Step 3: Starting strategy...');
-      const startCommand = `${sshCommand} 'cd ${EC2_PROJECT_PATH} && screen -dmS strategy python3 src/enhanced_strategy_executor_fixed.py'`;
+      const startCommand = `${sshCommand} 'cd ${EC2_PROJECT_PATH} && screen -dmS strategy -L -Logfile strategy_logs.txt python3 src/enhanced_strategy_executor_fixed.py'`;
       await execWithTimeout(startCommand, 4000);
       console.log('✓ Strategy started');
 

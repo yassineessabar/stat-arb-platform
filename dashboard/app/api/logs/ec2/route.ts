@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { NodeSSH } from 'node-ssh';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 // This endpoint fetches real-time logs from the EC2 instance running enhanced_strategy_executor_fixed.py
 export async function GET(request: NextRequest) {
@@ -14,34 +17,24 @@ export async function GET(request: NextRequest) {
     let logs: any[] = [];
 
     try {
-      // Attempt to connect to EC2 and fetch real logs
-      const ssh = new NodeSSH();
-
-      await ssh.connect({
-        host: EC2_HOST,
-        username: EC2_USER,
-        privateKeyPath: EC2_KEY_PATH,
-        readyTimeout: 10000
-      });
+      // Use the same SSH approach as the deployment API
+      const sshCommand = `ssh -i "${EC2_KEY_PATH}" -o ConnectTimeout=10 -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST}`;
 
       // Get the process ID of the running strategy
-      const psResult = await ssh.execCommand(
-        `cd ${EC2_PROJECT_PATH} && ps aux | grep enhanced_strategy_executor | grep -v grep | awk '{print $2}'`
-      );
+      const psCommand = `${sshCommand} 'cd ${EC2_PROJECT_PATH} && ps aux | grep enhanced_strategy_executor | grep -v grep | awk "{print \\$2}"'`;
+      const psResult = await execAsync(psCommand);
 
       let strategyLogs = '';
       if (psResult.stdout.trim()) {
         // Strategy is running, get fresh logs
-        const logResult = await ssh.execCommand(
-          `cd ${EC2_PROJECT_PATH} && (tail -n 100 strategy_logs.txt 2>/dev/null || echo "No readable log files found")`
-        );
+        const logCommand = `${sshCommand} 'cd ${EC2_PROJECT_PATH} && (tail -n 100 strategy_logs.txt 2>/dev/null || echo "No readable log files found")'`;
+        const logResult = await execAsync(logCommand);
         strategyLogs = logResult.stdout;
 
         // If no log files or empty log files, create informative message about setting up logging
         if (strategyLogs === "No readable log files found" || strategyLogs.trim() === "") {
-          const processInfo = await ssh.execCommand(
-            `cd ${EC2_PROJECT_PATH} && ps aux | grep enhanced_strategy_executor_fixed.py | grep -v grep`
-          );
+          const processInfoCommand = `${sshCommand} 'cd ${EC2_PROJECT_PATH} && ps aux | grep enhanced_strategy_executor_fixed.py | grep -v grep'`;
+          const processInfo = await execAsync(processInfoCommand);
 
           strategyLogs = `Strategy is running (PID: ${psResult.stdout.trim()}) but no log files found.
 
@@ -70,9 +63,8 @@ Process info: ${processInfo.stdout}`;
         }
       } else {
         // Try to get logs from the most recent run
-        const logResult = await ssh.execCommand(
-          `cd ${EC2_PROJECT_PATH} && (tail -n 20 strategy_logs.txt 2>/dev/null || tail -n 20 *.log 2>/dev/null | head -20 || echo "No strategy currently running and no log files found")`
-        );
+        const logCommand = `${sshCommand} 'cd ${EC2_PROJECT_PATH} && (tail -n 20 strategy_logs.txt 2>/dev/null || tail -n 20 *.log 2>/dev/null | head -20 || echo "No strategy currently running and no log files found")'`;
+        const logResult = await execAsync(logCommand);
         strategyLogs = logResult.stdout;
       }
 
@@ -127,28 +119,30 @@ Process info: ${processInfo.stdout}`;
             else if (cleanMessage.includes('ORDER EXECUTED') || cleanMessage.includes('✅')) level = 'SUCCESS';
             else if (cleanMessage.includes('WARNING') || cleanMessage.includes('⚠️')) level = 'WARNING';
 
-            logs.push({
-              timestamp: isoTimestamp,
-              level,
-              message: cleanMessage
-            });
+            // Filter out any simulated messages that might have been cached
+            if (!cleanMessage.includes('SIMULATED') && !cleanMessage.includes('EC2 CONNECTION NEEDED')) {
+              logs.push({
+                timestamp: isoTimestamp,
+                level,
+                message: cleanMessage
+              });
+            }
           }
         }
       }
 
-      ssh.dispose();
+      // SSH connection disposed automatically with execAsync
 
-      if (logs.length > 0) {
-        return NextResponse.json({
-          success: true,
-          logs,
-          source: 'ec2_live',
-          debug: {
-            psOutput: psResult.stdout,
-            logContent: strategyLogs.substring(0, 200) + '...'
-          }
-        });
-      }
+      // Always return real EC2 data (even if no logs parsed) to prevent fallback
+      return NextResponse.json({
+        success: true,
+        logs,
+        source: 'ec2_live',
+        debug: {
+          psOutput: psResult.stdout,
+          logContent: strategyLogs.substring(0, 200) + '...'
+        }
+      });
     } catch (sshError) {
       console.warn('EC2 SSH connection failed, falling back to simulated logs:', sshError);
       console.warn('SSH Error details:', {
