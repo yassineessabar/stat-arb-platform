@@ -44,11 +44,67 @@ export function DailyPnLChart({ mode, onTradeClick }: DailyPnLChartProps) {
     const fetchTradeHistory = async () => {
       try {
         setIsLoading(true)
-        const response = await fetch(`/api/trade-history?timeframe=${timeframe}&mode=${mode}`)
+
+        // Use the same API as Live Metrics for consistency
+        const response = await fetch(`/api/binance/trades?mode=${mode}&limit=1000&all=true`)
         const result = await response.json()
 
-        if (result.success && result.data) {
-          setData(result.data)
+        if (result.success !== false && result.trades && result.trades.length > 0) {
+          // Process trades into daily data (same logic as trade-history API)
+          const dailyData: Map<string, DailyPnLData> = new Map()
+
+          result.trades.forEach((trade: any) => {
+            const tradeTime = new Date(trade.time)
+            const dateKey = tradeTime.toISOString().split('T')[0]
+
+            if (!dailyData.has(dateKey)) {
+              dailyData.set(dateKey, {
+                date: dateKey,
+                pnl: 0,
+                trades: [],
+                tradeCount: 0,
+                winRate: 0,
+                volume: 0
+              })
+            }
+
+            const dayData = dailyData.get(dateKey)!
+            const realizedPnl = parseFloat(trade.realizedPnl || '0')
+            const qty = parseFloat(trade.qty || '0')
+            const price = parseFloat(trade.price || '0')
+
+            const tradeDetail: TradeDetail = {
+              symbol: trade.symbol,
+              side: trade.side,
+              quantity: qty,
+              price: price,
+              time: tradeTime.toISOString(),
+              commission: parseFloat(trade.commission || '0'),
+              commissionAsset: trade.commissionAsset,
+              realizedPnl: realizedPnl,
+              quoteQty: Math.abs(qty * price),
+              positionSide: trade.positionSide,
+              maker: trade.maker,
+              orderId: trade.orderId
+            }
+
+            dayData.trades.push(tradeDetail)
+            dayData.pnl += realizedPnl
+            dayData.tradeCount++
+            dayData.volume += Math.abs(qty * price)
+          })
+
+          // Calculate win rates
+          dailyData.forEach((dayData) => {
+            const wins = dayData.trades.filter(t => t.realizedPnl > 0).length
+            dayData.winRate = dayData.tradeCount > 0 ? (wins / dayData.tradeCount) * 100 : 0
+            dayData.trades.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+          })
+
+          const sortedData = Array.from(dailyData.values())
+            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+
+          setData(sortedData)
         } else {
           // Generate sample data if no real data
           generateSampleData()

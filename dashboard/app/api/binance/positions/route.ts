@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 
     const accountInfo = await binanceClient.getAccountInfo();
 
-    // Filter for open positions (non-zero position amount)
+    // Filter for open positions (non-zero position amount) - restore exact working version
     const openPositions = [];
 
     if (accountInfo.positions) {
@@ -83,7 +83,6 @@ export async function GET(request: NextRequest) {
     }
 
     // Return actual positions (empty if none)
-
     return NextResponse.json({
       positions: openPositions
     });

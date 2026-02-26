@@ -437,14 +437,8 @@ export default function ExecutionPage() {
         const totalInitialMargin = parseFloat(account.totalInitialMargin || '0');
         const totalMaintMargin = parseFloat(account.totalMaintMargin || '0');
 
-        // Calculate position notional from actual positions
+        // Calculate position notional - we'll get this from the positions API response instead
         let totalNotional = 0;
-        if (account.positions && Array.isArray(account.positions)) {
-          totalNotional = account.positions.reduce((sum: number, pos: any) => {
-            const notional = Math.abs(parseFloat(pos.positionAmt || '0')) * parseFloat(pos.markPrice || '0');
-            return sum + notional;
-          }, 0);
-        }
 
         // Calculate daily P&L from today's trades
         let dailyPnL = 0;
@@ -494,8 +488,8 @@ export default function ExecutionPage() {
           unrealizedPnL: unrealized,
           realizedPnL: parseFloat(account.totalRealizedPnl || account.totalPnL || '0'),
           dailyPnL: dailyPnL,
-          currentExposure: totalNotional,
-          grossLeverage: grossLeverage,
+          currentExposure: isNaN(totalNotional) || !isFinite(totalNotional) ? 0 : totalNotional,
+          grossLeverage: isNaN(grossLeverage) || !isFinite(grossLeverage) ? 0 : grossLeverage,
           riskUtilization: riskUtil,
           slippageAvg: avgSlippage,
           turnover: turnover
@@ -504,19 +498,35 @@ export default function ExecutionPage() {
 
       if (positionsRes.ok) {
         const data = await positionsRes.json();
+
+        // Use the exact working version's mapping and calculate total notional
+        let totalNotional = 0;
         const binancePositions = data.positions?.map((p: any) => {
-          const notional = Math.abs(parseFloat(p.size || p.positionAmt || '0')) * parseFloat(p.markPrice || p.entryPrice || '0');
+          const notional = p.notional || 0;
+          totalNotional += Math.abs(notional);
+
           return {
             asset: p.symbol,
-            qty: parseFloat(p.size || p.positionAmt || '0'),
-            entryPrice: parseFloat(p.entryPrice || '0'),
-            currentPrice: parseFloat(p.markPrice || p.entryPrice || '0'),
-            pnl: parseFloat(p.pnl || p.unrealizedProfit || '0'),
-            exposurePercent: liveMetrics.marginBalance > 0 ? (notional / liveMetrics.marginBalance) * 100 : 0,
-            margin: parseFloat(p.margin || p.initialMargin || '0')
+            qty: p.size,
+            entryPrice: p.entryPrice,
+            currentPrice: p.markPrice || p.entryPrice,
+            pnl: p.pnl,
+            exposurePercent: (notional / 5000) * 100,
+            margin: p.margin
           };
         }) || [];
+
         setPositions(binancePositions);
+
+        // Recalculate gross leverage with updated notional
+        const updatedGrossLeverage = liveMetrics.marginBalance > 0 ? Math.abs(totalNotional) / liveMetrics.marginBalance : 0;
+
+        // Update live metrics with correct notional and leverage
+        setLiveMetrics(prevMetrics => ({
+          ...prevMetrics,
+          currentExposure: isNaN(totalNotional) || !isFinite(totalNotional) ? 0 : totalNotional,
+          grossLeverage: isNaN(updatedGrossLeverage) || !isFinite(updatedGrossLeverage) ? 0 : updatedGrossLeverage,
+        }));
       }
 
       if (tradesRes.ok) {
@@ -1269,7 +1279,7 @@ export default function ExecutionPage() {
         {/* 2. Live Metrics */}
         <div className="bg-white border border-neutral-200 rounded-lg p-6 mb-6">
           <h2 className="text-lg font-medium text-neutral-900 mb-4">Live Metrics (From Binance)</h2>
-          <div className="grid grid-cols-3 gap-6">
+          <div className="grid grid-cols-3 gap-6 mb-4">
             <div>
               <div className="text-sm text-neutral-600 mb-1">Margin Balance</div>
               <div className="text-2xl font-medium">${liveMetrics.marginBalance.toFixed(2)}</div>
@@ -1286,6 +1296,8 @@ export default function ExecutionPage() {
                 {liveMetrics.realizedPnL >= 0 ? '+' : ''}${liveMetrics.realizedPnL.toFixed(2)}
               </div>
             </div>
+          </div>
+          <div className="grid grid-cols-3 gap-6">
             <div>
               <div className="text-sm text-neutral-600 mb-1">Daily P&L</div>
               <div className={`text-xl font-medium ${liveMetrics.dailyPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
