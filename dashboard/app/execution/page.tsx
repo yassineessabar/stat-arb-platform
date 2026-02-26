@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { NavHeader } from "@/components/layout/nav-header";
 import { DatabaseService, StrategyDeployment, Position, Trade } from "@/lib/supabase";
-import DeploymentModal from "@/components/DeploymentModal";
+import { DailyPnLChart } from "@/components/DailyPnLChart";
 // EC2Monitor removed - replaced with real-time log streaming
 
 type Environment = 'paper' | 'live';
@@ -44,8 +44,13 @@ interface Order {
   size: number;
   price: number;
   slippage: number;
+  commission?: number;
+  commissionAsset?: string;
+  realizedPnl?: number;
   status: 'FILLED' | 'PARTIAL' | 'CANCELLED' | 'REJECTED' | 'RISK_BLOCKED';
   orderId?: string;
+  positionSide?: string;
+  maker?: boolean;
 }
 
 interface LogEvent {
@@ -78,6 +83,7 @@ export default function ExecutionPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [showDeployModal, setShowDeployModal] = useState(false);
   const [apiConnected, setApiConnected] = useState(false);
+  const [strategyDeployed, setStrategyDeployed] = useState(false);
   const [deploymentProcessId, setDeploymentProcessId] = useState<string | null>(null);
   const [apiCredentials, setApiCredentials] = useState<ApiCredentials>({
     apiKey: '',
@@ -110,7 +116,6 @@ export default function ExecutionPage() {
   const [strategyLogs, setStrategyLogs] = useState<any[]>([]);
   const [ec2Logs, setEc2Logs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [showServerDeployModal, setShowServerDeployModal] = useState(false);
   const [vpsDeployments, setVpsDeployments] = useState<any[]>([]);
 
   const [strategyParams, setStrategyParams] = useState<StrategyParameters>({
@@ -132,23 +137,63 @@ export default function ExecutionPage() {
 
   // Load credentials from localStorage on mount and fetch database data
   useEffect(() => {
-    const stored = localStorage.getItem('binance_paper_credentials');
-    if (stored) {
-      try {
-        const creds = JSON.parse(stored);
-        setApiCredentials(creds);
-        setTempCredentials(creds);
-        addLog('API', 'Credentials loaded from storage', 'info');
-      } catch (e) {
-        addLog('ERROR', 'Failed to load stored credentials', 'warning');
-      }
-    }
+    // Always clear and use fresh credentials to ensure they work
+    localStorage.removeItem('binance_paper_credentials');
+
+    // Auto-load hardcoded testnet credentials for demo
+    const envCreds = {
+      apiKey: 'UigdoIwOPHWFIvkjhrGvL1aqJwd4p88J7IQhkfMVrD8zmvjBCD0rhXdWqlAjMr5I',
+      secretKey: 'XMg47ARX09YFUel64EdMxngYcXSz2iuyi81uATO7jsshhos9NIh3XwvSRYwovvKN',
+      testnet: true
+    };
+    setApiCredentials(envCreds);
+    setTempCredentials(envCreds);
+    addLog('API', 'Auto-loaded fresh testnet credentials', 'info');
 
     // Load active deployments from database
     loadActiveDeployments();
 
     // Load initial EC2 logs
     loadEc2Logs();
+
+    // Trigger initial data fetch after a short delay
+    setTimeout(async () => {
+      console.log('🚀 Triggering initial data fetch...');
+      // Directly fetch trades without waiting for API connection
+      try {
+        const tradesRes = await fetch('/api/binance/trades?mode=paper&limit=1000&all=true');
+        if (tradesRes.ok) {
+          const data = await tradesRes.json();
+          console.log('✅ Direct fetch got', data.trades?.length || 0, 'trades');
+          if (data.trades && data.trades.length > 0) {
+            const mappedOrders = data.trades.map((t: any) => ({
+              time: new Date(t.time || Date.now()),
+              asset: t.symbol,
+              side: t.side,
+              size: parseFloat(t.qty || '0'),
+              price: parseFloat(t.price || '0'),
+              slippage: 0,
+              commission: parseFloat(t.commission || '0'),
+              commissionAsset: t.commissionAsset,
+              realizedPnl: parseFloat(t.realizedPnl || '0'),
+              status: 'FILLED' as const,
+              orderId: t.orderId,
+              positionSide: t.positionSide,
+              maker: t.maker
+            }));
+            setOrders(mappedOrders);
+            console.log('✅ Set', mappedOrders.length, 'orders directly');
+          }
+        }
+      } catch (error) {
+        console.error('Direct fetch error:', error);
+      }
+
+      // Also try regular fetch if API key exists
+      if (envCreds.apiKey) {
+        await fetchExecutionData();
+      }
+    }, 1500);
   }, []);
 
   // Load active deployments from database and get latest running strategy from files
@@ -315,17 +360,36 @@ export default function ExecutionPage() {
     }, ...prev].slice(0, 100));
   };
 
+  // Helper function to escape CSV values
+  const escapeCSV = (value: any): string => {
+    if (value === null || value === undefined) return '';
+    const str = value.toString();
+    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
   const testConnection = async () => {
     try {
       // Use environment to determine API mode: 'paper' uses testnet, 'live' uses live API
       const apiMode = environment; // 'paper' or 'live'
-      const response = await fetch(`/api/binance/test?mode=${apiMode}`);
-
+      const response = await fetch(`/api/binance/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiKey: apiCredentials.apiKey,
+          secretKey: apiCredentials.secretKey,
+          testnet: apiCredentials.testnet
+        })
+      });
       const result = await response.json();
 
       if (result.connected) {
         setApiConnected(true);
         addLog('API', `Connected to Binance ${apiCredentials.testnet ? 'Testnet' : 'Mainnet'}`, 'info');
+        // Immediately fetch execution data after successful connection
+        fetchExecutionData();
       } else {
         setApiConnected(false);
         addLog('API', `Connection failed: ${result.error}`, 'critical');
@@ -345,66 +409,161 @@ export default function ExecutionPage() {
 
   // Fetch live data from Binance
   const fetchExecutionData = async () => {
-    if (!apiConnected || !apiCredentials.apiKey) return;
+    // Allow fetching if we have credentials, even if not fully connected yet
+    if (!apiCredentials.apiKey) {
+      console.log('⚠️ No API key available for fetching data');
+      return;
+    }
+    console.log('📊 Starting fetchExecutionData...');
 
     try {
       // Use testnet API for paper trading, live API for live trading
       const apiMode = environment; // 'paper' or 'live'
+      const tradesUrl = `/api/binance/trades?mode=${apiMode}&limit=1000&all=true`;
+      console.log('📡 Fetching trades from:', tradesUrl);
+
       const [accountRes, positionsRes, tradesRes] = await Promise.all([
         fetch(`/api/binance/account?mode=${apiMode}`),
         fetch(`/api/binance/positions?mode=${apiMode}`),
-        fetch(`/api/binance/trades?mode=${apiMode}`)
+        fetch(tradesUrl) // Get all trade history
       ]);
 
       if (accountRes.ok) {
         const account = await accountRes.json();
 
         // Use real Binance Futures account data
-        const marginBalance = parseFloat(account.marginBalance || '0');
+        const marginBalance = parseFloat(account.marginBalance || account.totalWalletBalance || '0');
         const unrealized = parseFloat(account.totalUnrealizedProfit || '0');
         const totalInitialMargin = parseFloat(account.totalInitialMargin || '0');
-        const positionNotional = parseFloat(account.positionNotional || '0');
+        const totalMaintMargin = parseFloat(account.totalMaintMargin || '0');
+
+        // Calculate position notional from actual positions
+        let totalNotional = 0;
+        if (account.positions && Array.isArray(account.positions)) {
+          totalNotional = account.positions.reduce((sum: number, pos: any) => {
+            const notional = Math.abs(parseFloat(pos.positionAmt || '0')) * parseFloat(pos.markPrice || '0');
+            return sum + notional;
+          }, 0);
+        }
+
+        // Calculate daily P&L from today's trades
+        let dailyPnL = 0;
+        let dailyVolume = 0;
+        let slippageSum = 0;
+        let slippageCount = 0;
+
+        if (tradesRes.ok) {
+          const tradesData = await tradesRes.json();
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+
+          if (tradesData.trades && Array.isArray(tradesData.trades)) {
+            tradesData.trades.forEach((trade: any) => {
+              const tradeTime = new Date(trade.time);
+
+              // Calculate daily P&L from today's realized trades
+              if (tradeTime >= today) {
+                dailyPnL += parseFloat(trade.realizedPnl || '0');
+                dailyVolume += Math.abs(parseFloat(trade.qty || '0')) * parseFloat(trade.price || '0');
+              }
+
+              // Calculate slippage if we have both executed price and expected price
+              if (trade.price && trade.expectedPrice) {
+                const slippage = Math.abs(parseFloat(trade.price) - parseFloat(trade.expectedPrice)) / parseFloat(trade.expectedPrice) * 100;
+                slippageSum += slippage;
+                slippageCount++;
+              }
+            });
+          }
+        }
+
+        // Calculate gross leverage properly
+        const grossLeverage = marginBalance > 0 ? Math.abs(totalNotional) / marginBalance : 0;
+
+        // Calculate risk utilization based on margin usage
+        const riskUtil = marginBalance > 0 ? (totalInitialMargin / marginBalance) * 100 : 0;
+
+        // Calculate average slippage
+        const avgSlippage = slippageCount > 0 ? slippageSum / slippageCount : 0.05;
+
+        // Calculate turnover (daily volume / account balance)
+        const turnover = marginBalance > 0 ? dailyVolume / marginBalance : 0;
 
         setLiveMetrics({
           marginBalance: marginBalance,
           unrealizedPnL: unrealized,
-          realizedPnL: parseFloat(account.totalPnL || '0'),
-          dailyPnL: 0, // Would need historical data to calculate daily P&L
-          currentExposure: positionNotional,
-          grossLeverage: marginBalance > 0 ? positionNotional / marginBalance : 0,
-          riskUtilization: marginBalance > 0 ? (totalInitialMargin / marginBalance) * 100 : 0,
-          slippageAvg: 0.05, // Would need trade data to calculate real slippage
-          turnover: 0.12 // Would need trade data to calculate real turnover
+          realizedPnL: parseFloat(account.totalRealizedPnl || account.totalPnL || '0'),
+          dailyPnL: dailyPnL,
+          currentExposure: totalNotional,
+          grossLeverage: grossLeverage,
+          riskUtilization: riskUtil,
+          slippageAvg: avgSlippage,
+          turnover: turnover
         });
       }
 
       if (positionsRes.ok) {
         const data = await positionsRes.json();
-        const binancePositions = data.positions?.map((p: any) => ({
-          asset: p.symbol,
-          qty: p.size,
-          entryPrice: p.entryPrice,
-          currentPrice: p.markPrice || p.entryPrice,
-          pnl: p.pnl,
-          exposurePercent: (p.notional / 5000) * 100,
-          margin: p.margin
-        })) || [];
+        const binancePositions = data.positions?.map((p: any) => {
+          const notional = Math.abs(parseFloat(p.size || p.positionAmt || '0')) * parseFloat(p.markPrice || p.entryPrice || '0');
+          return {
+            asset: p.symbol,
+            qty: parseFloat(p.size || p.positionAmt || '0'),
+            entryPrice: parseFloat(p.entryPrice || '0'),
+            currentPrice: parseFloat(p.markPrice || p.entryPrice || '0'),
+            pnl: parseFloat(p.pnl || p.unrealizedProfit || '0'),
+            exposurePercent: liveMetrics.marginBalance > 0 ? (notional / liveMetrics.marginBalance) * 100 : 0,
+            margin: parseFloat(p.margin || p.initialMargin || '0')
+          };
+        }) || [];
         setPositions(binancePositions);
       }
 
       if (tradesRes.ok) {
         const tradesData = await tradesRes.json();
-        const recentOrders = tradesData.trades?.slice(0, 10).map((t: any) => ({
-          time: new Date(t.time || Date.now()),
-          asset: t.symbol,
-          side: t.side,
-          size: t.quantity,
-          price: t.price,
-          slippage: 0.05,
-          status: 'FILLED' as const,
-          orderId: t.orderId
-        })) || [];
+        console.log('📊 Fetched trades:', tradesData.count || tradesData.trades?.length || 0);
+
+        if (!tradesData.trades || !Array.isArray(tradesData.trades)) {
+          console.warn('No trades array in response:', tradesData);
+          setOrders([]);
+        } else {
+
+        const recentOrders = tradesData.trades.map((t: any) => {
+          // Calculate actual slippage if we have order info
+          let slippage = 0;
+          if (t.expectedPrice && t.price) {
+            slippage = Math.abs(parseFloat(t.price) - parseFloat(t.expectedPrice)) / parseFloat(t.expectedPrice) * 100;
+          }
+
+          return {
+            time: new Date(t.time || Date.now()),
+            asset: t.symbol,
+            side: t.side,
+            size: parseFloat(t.qty || t.quantity || '0'),
+            price: parseFloat(t.price || '0'),
+            slippage: slippage,
+            commission: parseFloat(t.commission || '0'),
+            commissionAsset: t.commissionAsset,
+            realizedPnl: parseFloat(t.realizedPnl || '0'),
+            status: 'FILLED' as const,
+            orderId: t.orderId,
+            positionSide: t.positionSide,
+            maker: t.maker
+          };
+        });
+
+        // Sort by time, most recent first
+        recentOrders.sort((a: any, b: any) => b.time.getTime() - a.time.getTime());
+        console.log('📈 Setting orders:', recentOrders.length);
         setOrders(recentOrders);
+
+        if (recentOrders.length > 0) {
+          addLog('TRADES', `Loaded ${recentOrders.length} trades from Binance`, 'info');
+        }
+        }
+      } else {
+        console.warn('Trades response not OK:', tradesRes.status);
+        setOrders([]);
       }
 
     } catch (error) {
@@ -527,34 +686,88 @@ export default function ExecutionPage() {
   };
 
   const handleKillSwitch = async () => {
-    if (confirm('KILL SWITCH: Close all positions and stop strategy immediately?')) {
-      // First stop the strategy process if running
-      if (deploymentProcessId) {
-        await stopStrategy();
-      }
+    if (confirm('KILL SWITCH: Stop strategy on EC2 server and close all positions immediately?')) {
+      try {
+        setLoading(true);
 
-      setStrategyStatus('stopped');
+        // Stop strategy on EC2 server
+        const response = await fetch('/api/ec2/stop-strategy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
 
-      // If in live mode, actually close positions
-      if (environment === 'live' && positions.length > 0) {
-        try {
-          const response = await fetch('/api/binance/emergency-stop', {
-            method: 'POST'
-          });
-          const result = await response.json();
+        const result = await response.json();
 
-          if (result.success) {
-            addLog('RISK', `KILL SWITCH ACTIVATED - ${result.closedPositions?.length || 0} positions closed`, 'critical');
-            setPositions([]);
-          } else {
-            addLog('ERROR', 'Kill switch failed - manual intervention required', 'critical');
+        if (result.success) {
+          setStrategyStatus('stopped');
+          setDeploymentProcessId(null);
+          setApiConnected(false);
+          setStrategyDeployed(false);
+          addLog('RISK', 'KILL SWITCH ACTIVATED - Strategy stopped on EC2 server', 'critical');
+
+          // If in live mode, also close positions
+          if (environment === 'live' && positions.length > 0) {
+            try {
+              const emergencyResponse = await fetch('/api/binance/emergency-stop', {
+                method: 'POST'
+              });
+              const emergencyResult = await emergencyResponse.json();
+              if (emergencyResult.success) {
+                addLog('RISK', `${emergencyResult.closedPositions?.length || 0} positions closed`, 'critical');
+                setPositions([]);
+              }
+            } catch (error) {
+              addLog('ERROR', `Position closure failed: ${error}`, 'critical');
+            }
           }
-        } catch (error) {
-          addLog('ERROR', `Kill switch error: ${error}`, 'critical');
+        } else {
+          addLog('ERROR', `Kill switch failed: ${result.error || 'Unknown error'}`, 'critical');
         }
-      } else {
-        addLog('RISK', 'KILL SWITCH ACTIVATED - Strategy stopped', 'critical');
-        setPositions([]);
+      } catch (error) {
+        addLog('ERROR', `Kill switch error: ${error}`, 'critical');
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleDeployToEC2 = async () => {
+    if (confirm('Deploy strategy to EC2 server?')) {
+      try {
+        setLoading(true);
+        addLog('DEPLOYMENT', 'Deploying strategy to EC2 server...', 'info');
+
+        const deploymentConfig = {
+          ...strategyParams,
+          api_key: apiCredentials.apiKey,
+          api_secret: apiCredentials.secretKey,
+          testnet: apiCredentials.testnet
+        };
+
+        const response = await fetch('/api/ec2/deploy-strategy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(deploymentConfig)
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'Deployment failed');
+        }
+
+        const result = await response.json();
+        setStrategyStatus('running');
+        setApiConnected(true);
+        setStrategyDeployed(true);
+        addLog('DEPLOYMENT', 'Strategy deployed successfully on EC2!', 'info');
+
+        alert(`✅ Strategy deployed successfully on EC2!\n\nProcess Running: ${result.processRunning ? 'Yes' : 'No'}\n\nYour strategy is now running 24/7 on the EC2 server.`);
+      } catch (error: any) {
+        console.error('EC2 deployment error:', error);
+        addLog('ERROR', `EC2 deployment failed: ${error.message}`, 'critical');
+        alert(`❌ EC2 deployment failed: ${error.message}`);
+      } finally {
+        setLoading(false);
       }
     }
   };
@@ -1024,32 +1237,6 @@ export default function ExecutionPage() {
             </div>
           </div>
           <div className="flex space-x-3">
-            {strategyStatus === 'stopped' && (
-              <>
-                <button
-                  onClick={handleDeploy}
-                  disabled={!apiConnected}
-                  className={`px-4 py-2 text-sm font-medium rounded-md ${
-                    apiConnected
-                      ? 'bg-green-600 text-white hover:bg-green-700'
-                      : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
-                  }`}
-                >
-                  Deploy Locally
-                </button>
-                <button
-                  onClick={() => setShowServerDeployModal(true)}
-                  disabled={!apiConnected}
-                  className={`px-4 py-2 text-sm font-medium rounded-md ${
-                    apiConnected
-                      ? 'bg-blue-600 text-white hover:bg-blue-700'
-                      : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
-                  }`}
-                >
-                  Deploy to Server (24/7)
-                </button>
-              </>
-            )}
             {strategyStatus === 'running' && (
               <button
                 onClick={handlePause}
@@ -1067,10 +1254,14 @@ export default function ExecutionPage() {
               </button>
             )}
             <button
-              onClick={handleKillSwitch}
-              className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 ml-auto"
+              onClick={strategyDeployed ? handleKillSwitch : handleDeployToEC2}
+              className={`px-4 py-2 text-white text-sm font-medium rounded-md ml-auto ${
+                strategyDeployed
+                  ? 'bg-red-600 hover:bg-red-700'
+                  : 'bg-green-600 hover:bg-green-700'
+              }`}
             >
-              Kill Switch
+              {strategyDeployed ? 'Kill Switch' : 'Deploy'}
             </button>
           </div>
         </div>
@@ -1128,6 +1319,17 @@ export default function ExecutionPage() {
               <div className="text-xl font-medium">{liveMetrics.turnover.toFixed(2)}</div>
             </div>
           </div>
+        </div>
+
+        {/* Daily P&L Chart */}
+        <div className="mb-6">
+          <DailyPnLChart
+            mode={environment}
+            onTradeClick={(trade) => {
+              console.log('Trade clicked:', trade);
+              addLog('STRATEGY', `Viewing trade: ${trade.symbol} ${trade.side} ${trade.quantity} @ ${trade.price}`, 'info');
+            }}
+          />
         </div>
 
         {/* EC2 Monitor section removed - logs now shown in Strategy Logs section */}
@@ -1197,51 +1399,268 @@ export default function ExecutionPage() {
             </div>
           </div>
 
-          {/* Orders & Fills */}
+          {/* Transaction History */}
           <div className="bg-white border border-neutral-200 rounded-lg p-6">
-            <h3 className="text-lg font-medium text-neutral-900 mb-4">Orders & Fills</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
+            <div className="mb-4">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="text-lg font-medium text-neutral-900">Transaction History</h3>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500">
+                    {orders.length > 0 ? `${orders.length} total trades` : 'No trades yet'}
+                  </span>
+                  <button
+                    onClick={async () => {
+                      console.log('🔄 Manual refresh clicked');
+                      setOrders([]); // Clear first
+                      try {
+                        const res = await fetch('/api/binance/trades?mode=paper&limit=1000&all=true');
+                        if (res.ok) {
+                          const data = await res.json();
+                          console.log('✅ Manual refresh got', data.trades?.length || 0, 'trades');
+                          if (data.trades && data.trades.length > 0) {
+                            const mappedOrders = data.trades.map((t: any) => ({
+                              time: new Date(t.time || Date.now()),
+                              asset: t.symbol,
+                              side: t.side,
+                              size: parseFloat(t.qty || '0'),
+                              price: parseFloat(t.price || '0'),
+                              slippage: 0,
+                              commission: parseFloat(t.commission || '0'),
+                              commissionAsset: t.commissionAsset,
+                              realizedPnl: parseFloat(t.realizedPnl || '0'),
+                              status: 'FILLED' as const,
+                              orderId: t.orderId,
+                              positionSide: t.positionSide,
+                              maker: t.maker
+                            }));
+                            setOrders(mappedOrders);
+                            addLog('TRADES', `Loaded ${mappedOrders.length} trades`, 'info');
+                          }
+                        }
+                      } catch (error) {
+                        console.error('Refresh error:', error);
+                        addLog('ERROR', `Failed to refresh trades: ${error}`, 'critical');
+                      }
+                    }}
+                    className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+                  >
+                    Refresh
+                  </button>
+                  {orders.length > 0 && (
+                    <button
+                      onClick={() => {
+                        // Export to CSV
+                        const csvHeaders = ['Date', 'Time', 'Symbol', 'Side', 'Quantity', 'Price', 'Value', 'Commission', 'Realized P&L', 'Order ID'];
+                        const csvRows = orders.map(order => {
+                          const value = order.size * order.price;
+                          return [
+                            escapeCSV(order.time.toLocaleDateString('en-US')),
+                            escapeCSV(order.time.toLocaleTimeString('en-US', { hour12: false })),
+                            escapeCSV(order.asset),
+                            escapeCSV(order.side),
+                            escapeCSV(order.size.toFixed(4)),
+                            escapeCSV(order.price.toFixed(2)),
+                            escapeCSV(value.toFixed(2)),
+                            escapeCSV((order.commission || 0).toFixed(4)),
+                            escapeCSV(((order as any).realizedPnl || 0).toFixed(2)),
+                            escapeCSV(order.orderId || '')
+                          ].join(',');
+                        });
+
+                        const csvContent = [csvHeaders.join(','), ...csvRows].join('\n');
+                        const blob = new Blob([csvContent], { type: 'text/csv' });
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `trades_${new Date().toISOString().split('T')[0]}.csv`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+
+                        addLog('EXPORT', `Exported ${orders.length} trades to CSV`, 'info');
+                      }}
+                      className="text-xs px-2 py-1 bg-green-600 hover:bg-green-700 text-white rounded"
+                    >
+                      Export CSV
+                    </button>
+                  )}
+                </div>
+              </div>
+              {orders.length > 10 && (
+                <div className="flex items-center gap-4 px-2 py-1 bg-gray-50 rounded text-xs">
+                  <div>
+                    <span className="text-gray-600">24h P&L: </span>
+                    <span className={`font-semibold ${
+                      (() => {
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        return orders
+                          .filter(o => o.time >= today)
+                          .reduce((sum, o) => sum + ((o as any).realizedPnl || 0), 0);
+                      })() >= 0
+                        ? 'text-green-600'
+                        : 'text-red-600'
+                    }`}>
+                      ${Math.abs((() => {
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        return orders
+                          .filter(o => o.time >= today)
+                          .reduce((sum, o) => sum + ((o as any).realizedPnl || 0), 0);
+                      })()).toFixed(2)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Today: </span>
+                    <span className="font-semibold">
+                      {(() => {
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        return orders.filter(o => o.time >= today).length;
+                      })()} trades
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Avg Size: </span>
+                    <span className="font-semibold">
+                      ${(orders.reduce((sum, o) => sum + (o.size * o.price), 0) / Math.max(orders.length, 1)).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="overflow-x-auto max-h-96">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-white">
                   <tr className="border-b border-neutral-200">
                     <th className="text-left py-2 text-xs font-medium text-neutral-600 uppercase">Time</th>
-                    <th className="text-left py-2 text-xs font-medium text-neutral-600 uppercase">Asset</th>
-                    <th className="text-left py-2 text-xs font-medium text-neutral-600 uppercase">Side</th>
-                    <th className="text-right py-2 text-xs font-medium text-neutral-600 uppercase">Size</th>
+                    <th className="text-left py-2 text-xs font-medium text-neutral-600 uppercase">Symbol</th>
+                    <th className="text-center py-2 text-xs font-medium text-neutral-600 uppercase">Side</th>
+                    <th className="text-right py-2 text-xs font-medium text-neutral-600 uppercase">Qty</th>
                     <th className="text-right py-2 text-xs font-medium text-neutral-600 uppercase">Price</th>
-                    <th className="text-left py-2 text-xs font-medium text-neutral-600 uppercase">Status</th>
+                    <th className="text-right py-2 text-xs font-medium text-neutral-600 uppercase">Value</th>
+                    <th className="text-right py-2 text-xs font-medium text-neutral-600 uppercase">Fee</th>
+                    <th className="text-right py-2 text-xs font-medium text-neutral-600 uppercase">P&L</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {orders.length > 0 ? orders.map((order, idx) => (
-                    <tr key={idx} className="border-b border-neutral-100">
-                      <td className="py-2 text-sm">{order.time.toLocaleTimeString()}</td>
-                      <td className="py-2 text-sm font-medium">{order.asset}</td>
-                      <td className={`py-2 text-sm font-medium ${order.side === 'BUY' ? 'text-green-600' : 'text-red-600'}`}>
-                        {order.side}
-                      </td>
-                      <td className="py-2 text-sm text-right">{order.size}</td>
-                      <td className="py-2 text-sm text-right">${order.price.toFixed(2)}</td>
-                      <td className="py-2">
-                        <span className={`text-xs font-medium px-2 py-1 rounded ${
-                          order.status === 'FILLED' ? 'bg-green-100 text-green-700' :
-                          order.status === 'PARTIAL' ? 'bg-orange-100 text-orange-700' :
-                          'bg-neutral-100 text-neutral-700'
-                        }`}>
-                          {order.status}
-                        </span>
-                      </td>
-                    </tr>
-                  )) : (
+                <tbody className="divide-y divide-gray-100">
+                  {orders.length > 0 ? orders.slice(0, 200).map((order, idx) => {
+                    const realizedPnl = (order as any).realizedPnl || 0;
+                    const commission = (order as any).commission || 0;
+                    const value = order.size * order.price;
+
+                    return (
+                      <tr key={idx} className="hover:bg-gray-50">
+                        <td className="py-1.5">
+                          <div className="text-xs">
+                            {order.time.toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric'
+                            })}
+                          </div>
+                          <div className="text-gray-500 text-xs">
+                            {order.time.toLocaleTimeString('en-US', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              hour12: false
+                            })}
+                          </div>
+                        </td>
+                        <td className="py-1.5">
+                          <div className="font-medium text-xs">{order.asset}</div>
+                          {order.orderId && (
+                            <div className="text-gray-400 text-xs">#{order.orderId.toString().slice(-8)}</div>
+                          )}
+                        </td>
+                        <td className="py-1.5 text-center">
+                          <span className={`inline-flex px-1.5 py-0.5 text-xs font-semibold rounded-full ${
+                            order.side === 'BUY'
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {order.side}
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-right font-mono text-xs">{order.size.toFixed(4)}</td>
+                        <td className="py-1.5 text-right font-mono text-xs">${order.price.toFixed(2)}</td>
+                        <td className="py-1.5 text-right font-mono text-xs">${value.toFixed(2)}</td>
+                        <td className="py-1.5 text-right text-gray-500 text-xs">
+                          ${commission.toFixed(2)}
+                        </td>
+                        <td className="py-1.5 text-right">
+                          {realizedPnl !== 0 ? (
+                            <span className={`font-semibold text-xs ${
+                              realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'
+                            }`}>
+                              {realizedPnl >= 0 ? '+' : ''}${Math.abs(realizedPnl).toFixed(2)}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  }) : (
                     <tr>
-                      <td colSpan={6} className="py-4 text-center text-sm text-neutral-400">
-                        {apiConnected ? 'No recent orders' : 'Connect API to view orders'}
+                      <td colSpan={8} className="py-8 text-center text-sm text-neutral-400">
+                        {apiConnected ? (
+                          <div>
+                            <p className="mb-2">No transaction history available</p>
+                            <p className="text-xs">Transactions will appear here once you start trading</p>
+                          </div>
+                        ) : (
+                          'Connect API to view transaction history'
+                        )}
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
+
+            {/* Summary Stats */}
+            {orders.length > 0 && (
+              <div className="mt-4 pt-3 border-t border-gray-200">
+                <div className="grid grid-cols-4 gap-4 text-xs">
+                  <div>
+                    <span className="text-gray-500">Total Trades: </span>
+                    <span className="font-semibold">{orders.length}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Volume: </span>
+                    <span className="font-semibold">
+                      ${orders.reduce((sum, o) => sum + (o.size * o.price), 0).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Total P&L: </span>
+                    <span className={`font-semibold ${
+                      orders.reduce((sum, o) => sum + ((o as any).realizedPnl || 0), 0) >= 0
+                        ? 'text-green-600'
+                        : 'text-red-600'
+                    }`}>
+                      ${Math.abs(orders.reduce((sum, o) => sum + ((o as any).realizedPnl || 0), 0)).toFixed(2)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Win Rate: </span>
+                    <span className="font-semibold">
+                      {(() => {
+                        const wins = orders.filter(o => ((o as any).realizedPnl || 0) > 0).length;
+                        const total = orders.filter(o => ((o as any).realizedPnl || 0) !== 0).length;
+                        return total > 0 ? `${((wins / total) * 100).toFixed(0)}%` : '-';
+                      })()}
+                    </span>
+                  </div>
+                </div>
+                {orders.length > 200 && (
+                  <div className="mt-2 text-center text-xs text-gray-500">
+                    Showing first 200 of {orders.length} trades
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1392,47 +1811,6 @@ export default function ExecutionPage() {
         </div>
       </main>
 
-      {/* Server Deployment Modal */}
-      <DeploymentModal
-        isOpen={showServerDeployModal}
-        onClose={() => setShowServerDeployModal(false)}
-        strategyConfig={{
-          ...strategyParams,
-          api_key: apiCredentials.apiKey,
-          api_secret: apiCredentials.secretKey,
-          testnet: apiCredentials.testnet
-        }}
-        onDeploy={async (deploymentConfig) => {
-          try {
-            setLoading(true);
-            addLog('DEPLOYMENT', 'Initiating server deployment...', 'info');
-
-            const response = await fetch('/api/deploy-server', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(deploymentConfig)
-            });
-
-            if (!response.ok) {
-              const error = await response.json();
-              throw new Error(error.details || 'Deployment failed');
-            }
-
-            const result = await response.json();
-            addLog('DEPLOYMENT', `Deployment successful! ID: ${result.deploymentId}`, 'info');
-            setShowServerDeployModal(false);
-
-            // Show success notification
-            alert(`✅ Strategy deployed successfully!\n\nDeployment ID: ${result.deploymentId}\nServer: ${result.details.host}\nPath: ${result.details.deploymentPath}\n\nYour strategy is now running 24/7 on the server.`);
-          } catch (error: any) {
-            console.error('Deployment error:', error);
-            addLog('ERROR', `Deployment failed: ${error.message}`, 'critical');
-            alert(`❌ Deployment failed: ${error.message}`);
-          } finally {
-            setLoading(false);
-          }
-        }}
-      />
     </>
   );
 }

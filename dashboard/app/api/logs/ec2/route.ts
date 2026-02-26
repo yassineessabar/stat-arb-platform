@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     const EC2_HOST = process.env.EC2_HOST || 'your-ec2-instance.amazonaws.com';
     const EC2_USER = process.env.EC2_USER || 'ubuntu';
     const EC2_KEY_PATH = process.env.EC2_KEY_PATH || '/path/to/your-key.pem';
-    const EC2_PROJECT_PATH = process.env.EC2_PROJECT_PATH || '/home/ubuntu/stat-arb-platform';
+    const EC2_PROJECT_PATH = process.env.EC2_PROJECT_PATH || 'stat-arb-platform';
 
     // For development/demo, we'll fall back to simulated logs if EC2 connection fails
     let logs: any[] = [];
@@ -26,14 +26,14 @@ export async function GET(request: NextRequest) {
 
       // Get the process ID of the running strategy
       const psResult = await ssh.execCommand(
-        `ps aux | grep "python3 src/enhanced_strategy_executor_fixed.py" | grep -v grep | awk '{print $2}'`
+        `cd ${EC2_PROJECT_PATH} && ps aux | grep enhanced_strategy_executor | grep -v grep | awk '{print $2}'`
       );
 
       let strategyLogs = '';
       if (psResult.stdout.trim()) {
-        // Strategy is running, try multiple log file locations
+        // Strategy is running, get fresh logs
         const logResult = await ssh.execCommand(
-          `cd ${EC2_PROJECT_PATH} && (tail -n 50 strategy_logs.txt 2>/dev/null || tail -n 50 *.log 2>/dev/null | head -50 || echo "No readable log files found")`
+          `cd ${EC2_PROJECT_PATH} && (tail -n 100 strategy_logs.txt 2>/dev/null || echo "No readable log files found")`
         );
         strategyLogs = logResult.stdout;
 
@@ -84,43 +84,56 @@ Process info: ${processInfo.stdout}`;
           strategyLogs !== "No readable log files found" &&
           strategyLogs !== "No strategy currently running and no log files found") {
 
-        const logLines = strategyLogs.split('\n').filter(line => line.trim());
-        logs = logLines.map((line, index) => {
-          // Extract timestamp from log line if present, or use estimated time
-          let timestamp;
-          let cleanMessage = line.trim();
+        // Clean up the raw logs and split properly by timestamp
+        const cleanedLogs = strategyLogs
+          .replace(/\x1b\[[0-9;]*m/g, '') // Remove ANSI color codes
+          .replace(/\[[0-9;]*m/g, '') // Remove remaining color codes
+          .replace(/[\x00-\x1F\x7F]/g, '') // Remove all control characters
+          .replace(/\$\s*$/gm, '') // Remove $ at end of lines
+          .trim();
 
-          // Check if line has timestamp format: "2026-02-26 01:14:47,615 - message"
-          const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) - (.*)$/);
-          if (timestampMatch) {
-            // Parse the actual timestamp from the log
-            const logTime = timestampMatch[1].replace(',', '.');
-            timestamp = new Date(logTime).toISOString();
-            cleanMessage = timestampMatch[2];
-          } else {
-            // Use estimated timestamp for lines without timestamps
-            timestamp = new Date(Date.now() - (logLines.length - index) * 1000).toISOString();
+        // Split by timestamp pattern to get individual log entries
+        const timestampPattern = /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})/g;
+        const logEntries = cleanedLogs.split(timestampPattern).filter(entry => entry.trim());
+
+        logs = [];
+        for (let i = 0; i < logEntries.length; i += 2) {
+          if (i + 1 < logEntries.length) {
+            const timestamp = logEntries[i];
+            const content = logEntries[i + 1];
+
+            // Parse timestamp
+            const logTime = timestamp.replace(',', '.');
+            const isoTimestamp = new Date(logTime).toISOString();
+
+            // Clean up the message content
+            const cleanMessage = content
+              .replace(/^\s*-\s*INFO\s*-\s*/, '') // Remove "- INFO - " prefix
+              .replace(/^\s*-\s*ERROR\s*-\s*/, '') // Remove "- ERROR - " prefix
+              .replace(/^\s*-\s*/, '') // Remove leading "- "
+              .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+              .replace(/^INFO\s*-\s*/, '') // Remove "INFO - " prefix if present
+              .replace(/^ERROR\s*-\s*/, '') // Remove "ERROR - " prefix if present
+              .trim();
+
+            // Skip separators and empty lines
+            if (cleanMessage === '-------------' || cleanMessage === '' || cleanMessage.length < 3) {
+              continue;
+            }
+
+            // Determine log level based on content
+            let level = 'INFO';
+            if (content.includes('ERROR') || cleanMessage.includes('❌') || cleanMessage.includes('Order failed')) level = 'ERROR';
+            else if (cleanMessage.includes('ORDER EXECUTED') || cleanMessage.includes('✅')) level = 'SUCCESS';
+            else if (cleanMessage.includes('WARNING') || cleanMessage.includes('⚠️')) level = 'WARNING';
+
+            logs.push({
+              timestamp: isoTimestamp,
+              level,
+              message: cleanMessage
+            });
           }
-
-          // Clean up ANSI color codes and other terminal formatting
-          cleanMessage = cleanMessage
-            .replace(/\x1b\[[0-9;]*m/g, '') // Remove ANSI color codes
-            .replace(/\[[0-9;]*m/g, '') // Remove remaining color codes
-            .trim();
-
-          // Determine log level based on content
-          let level = 'INFO';
-          if (cleanMessage.includes('ERROR') || cleanMessage.includes('❌') || cleanMessage.includes('Order failed')) level = 'ERROR';
-          else if (cleanMessage.includes('SUCCESS') || cleanMessage.includes('✅') || cleanMessage.includes('ORDER EXECUTED')) level = 'SUCCESS';
-          else if (cleanMessage.includes('WARNING') || cleanMessage.includes('⚠️')) level = 'WARNING';
-          else if (cleanMessage.includes('Strategy is running') || cleanMessage.includes('To enable live log streaming')) level = 'WARNING';
-
-          return {
-            timestamp,
-            level,
-            message: cleanMessage
-          };
-        }).filter(log => log.message.length > 0); // Filter out empty messages
+        }
       }
 
       ssh.dispose();

@@ -1,4 +1,5 @@
 import { NavHeader } from "@/components/layout/nav-header";
+import { EquityCurve } from "@/components/EquityCurve";
 
 export default function DashboardPage() {
   const metrics = [
@@ -41,6 +42,10 @@ export default function DashboardPage() {
               </div>
             </div>
           ))}
+        </div>
+
+        <div className="mb-16">
+          <EquityCurve />
         </div>
 
         <div className="grid grid-cols-2 gap-16">

@@ -49,7 +49,7 @@ export class BinanceTestnetClient {
 
   constructor(credentials: BinanceCredentials) {
     // Use live API if isLive is true, otherwise use testnet
-    this.baseUrl = credentials.isLive ? 'https://fapi.binance.com' : 'https://demo-fapi.binance.com';
+    this.baseUrl = credentials.isLive ? 'https://fapi.binance.com' : 'https://testnet.binancefuture.com';
     this.credentials = credentials;
   }
 
@@ -201,6 +201,11 @@ export class BinanceTestnetClient {
   // Get recent trades
   async getMyTrades(symbol: string, limit: number = 10): Promise<any[]> {
     return this.makeRequest('/fapi/v1/userTrades', { symbol, limit });
+  }
+
+  // Alias for getMyTrades for consistency
+  async getUserTrades(symbol: string, limit: number = 10): Promise<any[]> {
+    return this.getMyTrades(symbol, limit);
   }
 
   // Place a futures order
