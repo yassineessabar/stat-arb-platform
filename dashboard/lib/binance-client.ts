@@ -4,6 +4,7 @@ import crypto from 'crypto';
 interface BinanceCredentials {
   apiKey: string;
   secretKey: string;
+  isLive?: boolean;
 }
 
 interface BinanceAccountInfo {
@@ -47,7 +48,8 @@ export class BinanceTestnetClient {
   private credentials: BinanceCredentials;
 
   constructor(credentials: BinanceCredentials) {
-    this.baseUrl = 'https://demo-fapi.binance.com';
+    // Use live API if isLive is true, otherwise use testnet
+    this.baseUrl = credentials.isLive ? 'https://fapi.binance.com' : 'https://demo-fapi.binance.com';
     this.credentials = credentials;
   }
 

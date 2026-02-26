@@ -2,21 +2,31 @@ import { NextResponse } from 'next/server';
 import { BinanceTestnetClient } from '@/lib/binance-client';
 import crypto from 'crypto';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const apiKey = process.env.BINANCE_TESTNET_API_KEY;
-    const secretKey = process.env.BINANCE_TESTNET_API_SECRET;
+    // Check query parameter for trading mode (paper = testnet, live = live API)
+    const { searchParams } = new URL(request.url);
+    const tradingMode = searchParams.get('mode') || 'paper';
+    const isLive = tradingMode === 'live';
+
+    const apiKey = isLive
+      ? process.env.BINANCE_LIVE_API_KEY
+      : process.env.BINANCE_TESTNET_API_KEY;
+    const secretKey = isLive
+      ? process.env.BINANCE_LIVE_API_SECRET
+      : process.env.BINANCE_TESTNET_API_SECRET;
 
     if (!apiKey || !secretKey) {
       return NextResponse.json({
         connected: false,
-        error: 'Binance API credentials not configured'
+        error: `Binance ${isLive ? 'Live' : 'Testnet'} API credentials not configured`
       });
     }
 
     const binanceClient = new BinanceTestnetClient({
       apiKey,
-      secretKey
+      secretKey,
+      isLive
     });
 
     const result = await binanceClient.testConnection();

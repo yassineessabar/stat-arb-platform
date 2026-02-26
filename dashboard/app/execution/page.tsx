@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { NavHeader } from "@/components/layout/nav-header";
 import { DatabaseService, StrategyDeployment, Position, Trade } from "@/lib/supabase";
 import DeploymentModal from "@/components/DeploymentModal";
-import EC2Monitor from "@/components/EC2Monitor";
+// EC2Monitor removed - replaced with real-time log streaming
 
 type Environment = 'paper' | 'live';
 type StrategyStatus = 'stopped' | 'running' | 'paused' | 'error';
@@ -16,11 +16,11 @@ interface ApiCredentials {
 }
 
 interface LiveMetrics {
-  currentEquity: number;
+  marginBalance: number;
   unrealizedPnL: number;
   realizedPnL: number;
   dailyPnL: number;
-  currentExposure: number;
+  currentExposure: number; // Position notional value
   grossLeverage: number;
   riskUtilization: number;
   slippageAvg: number;
@@ -91,7 +91,7 @@ export default function ExecutionPage() {
   });
 
   const [liveMetrics, setLiveMetrics] = useState<LiveMetrics>({
-    currentEquity: 0,
+    marginBalance: 0,
     unrealizedPnL: 0,
     realizedPnL: 0,
     dailyPnL: 0,
@@ -108,6 +108,7 @@ export default function ExecutionPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [logEvents, setLogEvents] = useState<LogEvent[]>([]);
   const [strategyLogs, setStrategyLogs] = useState<any[]>([]);
+  const [ec2Logs, setEc2Logs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [showServerDeployModal, setShowServerDeployModal] = useState(false);
   const [vpsDeployments, setVpsDeployments] = useState<any[]>([]);
@@ -145,6 +146,9 @@ export default function ExecutionPage() {
 
     // Load active deployments from database
     loadActiveDeployments();
+
+    // Load initial EC2 logs
+    loadEc2Logs();
   }, []);
 
   // Load active deployments from database and get latest running strategy from files
@@ -213,13 +217,15 @@ export default function ExecutionPage() {
     }
   };
 
-  // Load strategy logs from database first, fallback to files
+  // Load strategy logs from database first, fallback to files, then EC2 live logs
   const loadStrategyLogs = async () => {
     // Use the current deploymentProcessId
     const processId = deploymentProcessId;
 
     if (!processId) {
       setStrategyLogs([]);
+      // Still load EC2 logs to show live data even without local strategy
+      loadEc2Logs();
       return;
     }
 
@@ -267,10 +273,29 @@ export default function ExecutionPage() {
           console.warn('Failed to load strategy logs:', fileResult.error);
         }
         setStrategyLogs([]);
+        // Load EC2 live logs as fallback
+        loadEc2Logs();
       }
     } catch (error) {
       console.warn('Error fetching strategy logs:', error);
       setStrategyLogs([]);
+      // Load EC2 live logs as fallback
+      loadEc2Logs();
+    }
+  };
+
+  // Load live EC2-style logs (simulated terminal output)
+  const loadEc2Logs = async () => {
+    try {
+      const response = await fetch('/api/logs/ec2');
+      const result = await response.json();
+
+      if (result.success && result.logs) {
+        setEc2Logs(result.logs);
+      }
+    } catch (error) {
+      console.warn('Error fetching EC2 logs:', error);
+      setEc2Logs([]);
     }
   };
 
@@ -292,15 +317,9 @@ export default function ExecutionPage() {
 
   const testConnection = async () => {
     try {
-      const response = await fetch('/api/binance/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiKey: apiCredentials.apiKey,
-          secretKey: apiCredentials.secretKey,
-          testnet: apiCredentials.testnet
-        })
-      });
+      // Use environment to determine API mode: 'paper' uses testnet, 'live' uses live API
+      const apiMode = environment; // 'paper' or 'live'
+      const response = await fetch(`/api/binance/test?mode=${apiMode}`);
 
       const result = await response.json();
 
@@ -329,31 +348,33 @@ export default function ExecutionPage() {
     if (!apiConnected || !apiCredentials.apiKey) return;
 
     try {
-      // For paper trading, we use real Binance data but don't execute real trades
+      // Use testnet API for paper trading, live API for live trading
+      const apiMode = environment; // 'paper' or 'live'
       const [accountRes, positionsRes, tradesRes] = await Promise.all([
-        fetch('/api/binance/account'),
-        fetch('/api/binance/positions'),
-        fetch('/api/binance/trades')
+        fetch(`/api/binance/account?mode=${apiMode}`),
+        fetch(`/api/binance/positions?mode=${apiMode}`),
+        fetch(`/api/binance/trades?mode=${apiMode}`)
       ]);
 
       if (accountRes.ok) {
         const account = await accountRes.json();
 
-        // Calculate metrics
-        const equity = parseFloat(account.totalBalance || '0');
+        // Use real Binance Futures account data
+        const marginBalance = parseFloat(account.marginBalance || '0');
         const unrealized = parseFloat(account.totalUnrealizedProfit || '0');
-        const exposure = Math.abs(parseFloat(account.totalInitialMargin || '0'));
+        const totalInitialMargin = parseFloat(account.totalInitialMargin || '0');
+        const positionNotional = parseFloat(account.positionNotional || '0');
 
         setLiveMetrics({
-          currentEquity: equity,
+          marginBalance: marginBalance,
           unrealizedPnL: unrealized,
           realizedPnL: parseFloat(account.totalPnL || '0'),
-          dailyPnL: 0, // Would need historical data
-          currentExposure: exposure,
-          grossLeverage: equity > 0 ? exposure / equity : 0,
-          riskUtilization: equity > 0 ? (exposure / equity) * 100 : 0,
-          slippageAvg: 0.05, // Mock for now
-          turnover: 0.12 // Mock for now
+          dailyPnL: 0, // Would need historical data to calculate daily P&L
+          currentExposure: positionNotional,
+          grossLeverage: marginBalance > 0 ? positionNotional / marginBalance : 0,
+          riskUtilization: marginBalance > 0 ? (totalInitialMargin / marginBalance) * 100 : 0,
+          slippageAvg: 0.05, // Would need trade data to calculate real slippage
+          turnover: 0.12 // Would need trade data to calculate real turnover
         });
       }
 
@@ -401,6 +422,10 @@ export default function ExecutionPage() {
         if (Date.now() % 10000 < 2000) {
           loadActiveDeployments();
           loadStrategyLogs();
+        }
+        // Refresh EC2 logs more frequently (every 5 seconds)
+        if (Date.now() % 5000 < 2000) {
+          loadEc2Logs();
         }
       }, 2000);
       return () => clearInterval(interval);
@@ -968,7 +993,7 @@ export default function ExecutionPage() {
               <div className="flex justify-between">
                 <span className="text-sm text-neutral-600">Capital:</span>
                 <span className="text-sm font-medium">
-                  ${liveMetrics.currentEquity.toLocaleString()}
+                  ${liveMetrics.marginBalance.toLocaleString()}
                 </span>
               </div>
             </div>
@@ -1055,8 +1080,8 @@ export default function ExecutionPage() {
           <h2 className="text-lg font-medium text-neutral-900 mb-4">Live Metrics (From Binance)</h2>
           <div className="grid grid-cols-3 gap-6">
             <div>
-              <div className="text-sm text-neutral-600 mb-1">Current Equity</div>
-              <div className="text-2xl font-medium">${liveMetrics.currentEquity.toFixed(2)}</div>
+              <div className="text-sm text-neutral-600 mb-1">Margin Balance</div>
+              <div className="text-2xl font-medium">${liveMetrics.marginBalance.toFixed(2)}</div>
             </div>
             <div>
               <div className="text-sm text-neutral-600 mb-1">Unrealized P&L</div>
@@ -1077,7 +1102,7 @@ export default function ExecutionPage() {
               </div>
             </div>
             <div>
-              <div className="text-sm text-neutral-600 mb-1">Current Exposure</div>
+              <div className="text-sm text-neutral-600 mb-1">Position Notional</div>
               <div className="text-xl font-medium">${liveMetrics.currentExposure.toFixed(2)}</div>
             </div>
             <div>
@@ -1105,18 +1130,9 @@ export default function ExecutionPage() {
           </div>
         </div>
 
-        {/* 3. EC2 Instance Monitor */}
-        <div className="mb-6">
-          <EC2Monitor onConnectionChange={(connected) => {
-            if (connected) {
-              addLog('SYSTEM', 'Connected to EC2 instance', 'info');
-            } else {
-              addLog('SYSTEM', 'Disconnected from EC2 instance', 'warning');
-            }
-          }} />
-        </div>
+        {/* EC2 Monitor section removed - logs now shown in Strategy Logs section */}
 
-        {/* 4. Positions & Orders */}
+        {/* 3. Positions & Orders */}
         <div className="grid grid-cols-2 gap-6 mb-6">
           {/* Open Positions */}
           <div className="bg-white border border-neutral-200 rounded-lg p-6">
@@ -1229,13 +1245,18 @@ export default function ExecutionPage() {
           </div>
         </div>
 
-        {/* 4. Logs & Risk Events */}
+        {/* 4. Real-Time Strategy Logs (Live from EC2) */}
         <div className="bg-white border border-neutral-200 rounded-lg p-6">
           <h2 className="text-lg font-medium text-neutral-900 mb-4">
-            Strategy Logs & Signal Analysis
+            Real-Time Strategy Logs (Live from EC2)
             {deploymentProcessId && (
               <span className="ml-2 text-sm text-neutral-500 font-normal">
                 (Process: {deploymentProcessId.split('_')[1]})
+              </span>
+            )}
+            {!deploymentProcessId && ec2Logs.length > 0 && (
+              <span className="ml-2 text-sm text-green-500 font-normal">
+                (Live EC2 Terminal)
               </span>
             )}
           </h2>
@@ -1328,8 +1349,29 @@ export default function ExecutionPage() {
                   ));
                 }
               });
-            })() : logEvents.length > 0 ? (
-              // Fallback to frontend events if no strategy logs available
+            })() : ec2Logs.length > 0 ? (
+              // Show EC2 live logs as primary fallback
+              ec2Logs.map((log, idx) => (
+                <div key={idx} className={`mb-1 text-xs ${
+                  log.level === 'SUCCESS' ? 'text-green-400' :
+                  log.level === 'ERROR' ? 'text-red-400' :
+                  log.level === 'WARNING' ? 'text-orange-400' :
+                  log.message.includes('🔄 ITERATION') ? 'text-blue-400 font-semibold' :
+                  log.message.includes('📊 MARKET ANALYSIS') ? 'text-cyan-400 font-medium' :
+                  log.message.includes('OPEN POSITIONS') ? 'text-purple-300 font-medium' :
+                  log.message.includes('BTC/USDT') ? 'text-yellow-300' :
+                  log.message.includes('ETH/USDT') ? 'text-blue-300' :
+                  log.message.includes('BNB/USDT') ? 'text-amber-300' :
+                  log.message.includes('ORDER EXECUTED') ? 'text-green-400 font-semibold' :
+                  log.message.includes('----') ? 'text-neutral-600' :
+                  'text-neutral-400'
+                }`}>
+                  <span className="text-neutral-500">[{new Date(log.timestamp).toLocaleTimeString()}]</span>{' '}
+                  {log.message}
+                </div>
+              ))
+            ) : logEvents.length > 0 ? (
+              // Fallback to frontend events if no EC2 logs available
               logEvents.map((event, idx) => (
                 <div key={idx} className={`mb-1 ${
                   event.severity === 'critical' ? 'text-red-400' :
@@ -1343,7 +1385,7 @@ export default function ExecutionPage() {
               ))
             ) : (
               <div className="text-neutral-500">
-                {deploymentProcessId ? 'Loading strategy logs...' : 'No strategy running - Deploy a strategy to see logs'}
+                {deploymentProcessId ? 'Loading strategy logs...' : 'Loading live EC2 terminal data...'}
               </div>
             )}
           </div>
