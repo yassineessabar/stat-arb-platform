@@ -134,7 +134,12 @@ class SimpleBinanceClient:
             'ETHUSDT': 3,   # ETH futures use 3 decimal places
             'BNBUSDT': 2,   # BNB futures use 2 decimal places
             'SOLUSDT': 0,   # SOL futures use 0 decimal places
+            'XRPUSDT': 1,   # XRP futures use 1 decimal place
             'ADAUSDT': 0,   # ADA futures use 0 decimal places
+            'AVAXUSDT': 1,  # AVAX futures use 1 decimal place
+            'DOGEUSDT': 0,  # DOGE futures use 0 decimal places
+            'DOTUSDT': 1,   # DOT futures use 1 decimal place
+            'MATICUSDT': 0, # MATIC futures use 0 decimal places
         }
         return symbol_precisions.get(symbol, 3)  # Default to 3 if unknown
 
