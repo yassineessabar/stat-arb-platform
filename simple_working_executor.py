@@ -176,21 +176,22 @@ class SimpleStatArbBot:
         return (prices[-1] - mean) / std
 
     def check_signals(self):
-        """Check trading signals for all pairs"""
+        """Check trading signals using pair spread analysis (aligned with backtest)"""
         signals = {}
 
         logger.info("-" * 60)
-        logger.info("📊 MARKET ANALYSIS")
+        logger.info("📊 MARKET ANALYSIS (PAIR-BASED)")
         logger.info("-" * 60)
 
+        # Fetch all prices first
+        all_prices = {}
         for symbol in self.config['trading_pairs']:
-            # Fetch price data
             price_data = self.fetch_prices(symbol)
-            if price_data is None:
-                continue
+            if price_data is not None:
+                all_prices[symbol] = price_data['price']
 
-            price = price_data['price']
-
+        # Update price history for all symbols
+        for symbol, price in all_prices.items():
             if symbol not in self.price_history:
                 self.price_history[symbol] = []
 
@@ -200,37 +201,73 @@ class SimpleStatArbBot:
             if len(self.price_history[symbol]) > self.config['lookback_period']:
                 self.price_history[symbol] = self.price_history[symbol][-self.config['lookback_period']:]
 
-            # Progress indicator
-            progress = len(self.price_history[symbol])
-            lookback = self.config['lookback_period']
+        # Check if we have enough data for all symbols
+        min_data_points = min([len(self.price_history.get(s, [])) for s in self.config['trading_pairs']] + [0])
 
-            if progress < lookback:
-                logger.info(f"📈 {symbol}: ${price:.2f} | Collecting data... [{progress}/{lookback}]")
-                continue
+        if min_data_points < self.config['lookback_period']:
+            logger.info(f"📈 Collecting data... [{min_data_points}/{self.config['lookback_period']}]")
+            return signals
 
-            # Calculate z-score
-            zscore = self.calculate_zscore(self.price_history[symbol])
+        # Generate pair-based signals (simplified pair trading approach)
+        pairs = self.config['trading_pairs']
 
-            # Determine signal
-            signal = 'HOLD'
-            signal_emoji = '⏸️'
+        # Create simple pairs from the trading pairs list
+        for i in range(len(pairs)):
+            for j in range(i + 1, len(pairs)):
+                asset_a = pairs[i].replace('/', '')
+                asset_b = pairs[j].replace('/', '')
 
-            if symbol not in self.positions:
-                if zscore < -self.config['entry_threshold']:
-                    signal = 'BUY'
-                    signal_emoji = '🟢'
-                    signals[symbol] = signal
-                elif zscore > self.config['entry_threshold']:
-                    signal = 'SELL'
-                    signal_emoji = '🔴'
-                    signals[symbol] = signal
+                if asset_a in self.price_history and asset_b in self.price_history:
+                    # Calculate spread using price ratio (simplified vs hedge ratio)
+                    prices_a = np.array(self.price_history[asset_a])
+                    prices_b = np.array(self.price_history[asset_b])
 
-            logger.info(f"{signal_emoji} {symbol}: ${price:.2f} | Z-Score: {zscore:+.2f} | Signal: {signal}")
+                    # Use price ratio as a simple spread proxy
+                    spreads = prices_a / prices_b
+
+                    # Calculate z-score on the spread (not individual prices)
+                    spread_zscore = self.calculate_zscore(spreads.tolist())
+
+                    pair_name = f"{asset_a}-{asset_b}"
+
+                    # Pair trading signals (more sophisticated than individual asset signals)
+                    signal = 'HOLD'
+                    signal_emoji = '⏸️'
+
+                    # Check if we already have a position for this pair
+                    if pair_name not in self.positions:
+                        if spread_zscore > self.config['entry_threshold']:
+                            # Spread is high: short the pair (short A, long B)
+                            signal = 'SHORT_PAIR'
+                            signal_emoji = '🔴'
+                            signals[asset_a] = 'SELL'
+                            signals[asset_b] = 'BUY'
+                            logger.info(f"{signal_emoji} PAIR {pair_name}: Spread Z-Score: {spread_zscore:+.2f} | SHORT PAIR")
+                        elif spread_zscore < -self.config['entry_threshold']:
+                            # Spread is low: long the pair (long A, short B)
+                            signal = 'LONG_PAIR'
+                            signal_emoji = '🟢'
+                            signals[asset_a] = 'BUY'
+                            signals[asset_b] = 'SELL'
+                            logger.info(f"{signal_emoji} PAIR {pair_name}: Spread Z-Score: {spread_zscore:+.2f} | LONG PAIR")
+                        else:
+                            logger.info(f"⏸️ PAIR {pair_name}: Spread Z-Score: {spread_zscore:+.2f} | HOLD")
+                    else:
+                        logger.info(f"📍 PAIR {pair_name}: Spread Z-Score: {spread_zscore:+.2f} | POSITION OPEN")
+
+        # Also show individual asset analysis for reference
+        logger.info("📊 Individual Asset Analysis (Reference):")
+        for symbol in self.config['trading_pairs']:
+            symbol_clean = symbol.replace('/', '')
+            if symbol_clean in all_prices and symbol_clean in self.price_history:
+                price = all_prices[symbol_clean]
+                zscore = self.calculate_zscore(self.price_history[symbol_clean])
+                logger.info(f"   {symbol}: ${price:.2f} | Individual Z-Score: {zscore:+.2f}")
 
         return signals
 
     def execute_trade(self, symbol, signal):
-        """Execute REAL trades using working patterns"""
+        """Execute REAL trades using working patterns (now pair-aware)"""
         try:
             if signal == 'BUY':
                 logger.info(f"🔵 EXECUTING BUY: {symbol}")
@@ -258,11 +295,13 @@ class SimpleStatArbBot:
                 order = self.client.place_order(symbol.replace('/', ''), 'BUY', quantity)
 
                 if order:
+                    # Store position with pair awareness
                     self.positions[symbol] = {
                         'side': 'long',
                         'quantity': quantity,
                         'order_id': order['orderId'],
-                        'entry_time': datetime.now()
+                        'entry_time': datetime.now(),
+                        'type': 'pair_leg'  # Mark as part of pair trade
                     }
                     logger.info(f"✅ LONG POSITION CREATED: {symbol}")
 
@@ -292,11 +331,13 @@ class SimpleStatArbBot:
                 order = self.client.place_order(symbol.replace('/', ''), 'SELL', quantity)
 
                 if order:
+                    # Store position with pair awareness
                     self.positions[symbol] = {
                         'side': 'short',
                         'quantity': quantity,
                         'order_id': order['orderId'],
-                        'entry_time': datetime.now()
+                        'entry_time': datetime.now(),
+                        'type': 'pair_leg'  # Mark as part of pair trade
                     }
                     logger.info(f"✅ SHORT POSITION CREATED: {symbol}")
 
@@ -304,9 +345,11 @@ class SimpleStatArbBot:
             logger.error(f"❌ Error executing trade for {symbol}: {e}")
 
     def run(self):
-        """Main bot loop using working patterns"""
+        """Main bot loop using working patterns (now backtest-aligned)"""
         logger.info("=" * 60)
-        logger.info("📌 Check your orders at: https://testnet.binance.vision/")
+        logger.info("📈 BACKTEST-ALIGNED STATISTICAL ARBITRAGE BOT")
+        logger.info("📌 Check orders at: https://testnet.binancefuture.com/")
+        logger.info("📊 Using pair-based spread analysis (like backtest)")
         logger.info("=" * 60)
 
         iteration = 0
@@ -315,12 +358,29 @@ class SimpleStatArbBot:
                 iteration += 1
                 logger.info(f"\n🔄 ITERATION #{iteration} - {datetime.now().strftime('%H:%M:%S')}")
 
-                # Check for trading signals
+                # Check for trading signals (now pair-based)
                 signals = self.check_signals()
 
                 # Execute trades based on signals
                 for symbol, signal in signals.items():
                     self.execute_trade(symbol, signal)
+
+                # Status summary
+                logger.info("-" * 60)
+                logger.info("📈 PORTFOLIO STATUS")
+                logger.info("-" * 60)
+                open_positions = sum(1 for p in self.positions.values() if p.get('type') == 'pair_leg')
+                logger.info(f"   Open Positions: {open_positions}")
+                logger.info(f"   Signals Generated: {len(signals)}")
+
+                if self.positions:
+                    logger.info("   Current Positions:")
+                    for symbol, pos in self.positions.items():
+                        side = pos['side'].upper()
+                        qty = pos['quantity']
+                        logger.info(f"     {symbol}: {side} {qty}")
+
+                logger.info(f"⏰ Next check in {self.config['update_interval']} seconds...")
 
                 # Wait for next update
                 time.sleep(self.config['update_interval'])
