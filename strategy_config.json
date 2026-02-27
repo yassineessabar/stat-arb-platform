@@ -5,7 +5,7 @@
     "ETH/USDT",
     "BNB/USDT"
   ],
-  "lookback_period": 20,
+  "lookback_period": 5,
   "entry_threshold": 1.0,
   "exit_threshold": 0.2,
   "position_size": 100,

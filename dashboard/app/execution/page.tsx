@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { NavHeader } from "@/components/layout/nav-header";
 import { DatabaseService, StrategyDeployment, Position, Trade } from "@/lib/supabase";
 import { DailyPnLChart } from "@/components/DailyPnLChart";
@@ -126,7 +126,7 @@ export default function ExecutionPage() {
     portfolio_value: 10000,
     symbol_1: 'ETHUSDT',
     symbol_2: 'BTCUSDT',
-    lookback_period: 180,  // v6 default
+    lookback_period: 5,  // Changed from 180 to 5 for faster response
     entry_z_score: 1.0,    // v6 parameter
     exit_z_score: 0.2,     // v6 parameter
     stop_loss_z_score: 3.5, // v6 parameter
@@ -149,6 +149,11 @@ export default function ExecutionPage() {
     setApiCredentials(envCreds);
     setTempCredentials(envCreds);
     addLog('API', 'Auto-loaded fresh testnet credentials', 'info');
+
+    // Auto-connect with the loaded credentials
+    setTimeout(() => {
+      testConnection();
+    }, 500);
 
     // Load active deployments from database
     loadActiveDeployments();
@@ -331,6 +336,12 @@ export default function ExecutionPage() {
 
   // Load live EC2-style logs (simulated terminal output)
   const loadEc2Logs = async () => {
+    // Only fetch EC2 logs if there's an active deployment
+    if (!strategyDeployed) {
+      setEc2Logs([]);
+      return;
+    }
+
     try {
       const response = await fetch('/api/logs/ec2');
       const result = await response.json();
@@ -344,8 +355,13 @@ export default function ExecutionPage() {
     }
   };
 
-  // Test API connection whenever credentials change
+  // Test API connection whenever credentials change (skip initial mount)
+  const isInitialMount = useRef(true);
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return; // Skip on initial mount as we already connect in the first useEffect
+    }
     if (apiCredentials.apiKey && apiCredentials.secretKey) {
       testConnection();
     }
@@ -387,11 +403,16 @@ export default function ExecutionPage() {
 
       if (result.connected) {
         setApiConnected(true);
+        // When API connects successfully, set strategy to running
+        setStrategyStatus('running');
         addLog('API', `Connected to Binance ${apiCredentials.testnet ? 'Testnet' : 'Mainnet'}`, 'info');
         // Immediately fetch execution data after successful connection
         fetchExecutionData();
       } else {
         setApiConnected(false);
+        setStrategyStatus('stopped');
+        setStrategyDeployed(false);
+        setEc2Logs([]); // Clear EC2 logs when disconnected
         addLog('API', `Connection failed: ${result.error}`, 'critical');
       }
     } catch (error) {
@@ -428,6 +449,13 @@ export default function ExecutionPage() {
         fetch(tradesUrl) // Get all trade history
       ]);
 
+      // Read trades response only once
+      let tradesData: any = null;
+      if (tradesRes.ok) {
+        tradesData = await tradesRes.json();
+        console.log('📊 Fetched trades:', tradesData.count || tradesData.trades?.length || 0);
+      }
+
       if (accountRes.ok) {
         const account = await accountRes.json();
 
@@ -436,6 +464,7 @@ export default function ExecutionPage() {
         const unrealized = parseFloat(account.totalUnrealizedProfit || '0');
         const totalInitialMargin = parseFloat(account.totalInitialMargin || '0');
         const totalMaintMargin = parseFloat(account.totalMaintMargin || '0');
+
 
         // Calculate position notional - we'll get this from the positions API response instead
         let totalNotional = 0;
@@ -446,8 +475,7 @@ export default function ExecutionPage() {
         let slippageSum = 0;
         let slippageCount = 0;
 
-        if (tradesRes.ok) {
-          const tradesData = await tradesRes.json();
+        if (tradesData) {
           const today = new Date();
           today.setHours(0, 0, 0, 0);
 
@@ -529,10 +557,7 @@ export default function ExecutionPage() {
         }));
       }
 
-      if (tradesRes.ok) {
-        const tradesData = await tradesRes.json();
-        console.log('📊 Fetched trades:', tradesData.count || tradesData.trades?.length || 0);
-
+      if (tradesData) {
         if (!tradesData.trades || !Array.isArray(tradesData.trades)) {
           console.warn('No trades array in response:', tradesData);
           setOrders([]);
@@ -572,12 +597,13 @@ export default function ExecutionPage() {
         }
         }
       } else {
-        console.warn('Trades response not OK:', tradesRes.status);
+        console.warn('No trades data available');
         setOrders([]);
       }
 
     } catch (error) {
-      addLog('ERROR', `Failed to fetch data: ${error}`, 'critical');
+      console.error('Failed to fetch execution data:', error);
+      addLog('ERROR', `Failed to fetch data: ${error instanceof Error ? error.message : String(error)}`, 'critical');
     }
   };
 
@@ -937,7 +963,7 @@ export default function ExecutionPage() {
                             exit_z_score: useV6 ? 0.2 : 0.5,
                             stop_loss_z_score: useV6 ? 3.5 : 3.0,
                             max_positions: useV6 ? 30 : 3,
-                            lookback_period: useV6 ? 180 : 24
+                            lookback_period: useV6 ? 5 : 24
                           });
                         }}
                         className="rounded"
@@ -1247,32 +1273,42 @@ export default function ExecutionPage() {
             </div>
           </div>
           <div className="flex space-x-3">
-            {strategyStatus === 'running' && (
+            {/* Show different buttons based on API connection status */}
+            {apiConnected ? (
+              // When API is CONNECTED, show control buttons
+              <div className="flex space-x-3 ml-auto">
+                {strategyStatus === 'running' && (
+                  <button
+                    onClick={handlePause}
+                    className="px-4 py-2 bg-orange-600 text-white text-sm font-medium rounded-md hover:bg-orange-700"
+                  >
+                    Pause
+                  </button>
+                )}
+                {strategyStatus === 'paused' && (
+                  <button
+                    onClick={handleRestart}
+                    className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700"
+                  >
+                    Restart
+                  </button>
+                )}
+                <button
+                  onClick={handleKillSwitch}
+                  className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700"
+                >
+                  Kill
+                </button>
+              </div>
+            ) : (
+              // When API is DISCONNECTED, show Deploy button
               <button
-                onClick={handlePause}
-                className="px-4 py-2 bg-orange-600 text-white text-sm font-medium rounded-md hover:bg-orange-700"
+                onClick={handleDeployToEC2}
+                className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-700 ml-auto"
               >
-                Pause
+                Deploy
               </button>
             )}
-            {strategyStatus === 'paused' && (
-              <button
-                onClick={handleRestart}
-                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700"
-              >
-                Restart
-              </button>
-            )}
-            <button
-              onClick={strategyDeployed ? handleKillSwitch : handleDeployToEC2}
-              className={`px-4 py-2 text-white text-sm font-medium rounded-md ml-auto ${
-                strategyDeployed
-                  ? 'bg-red-600 hover:bg-red-700'
-                  : 'bg-green-600 hover:bg-green-700'
-              }`}
-            >
-              {strategyDeployed ? 'Kill Switch' : 'Deploy'}
-            </button>
           </div>
         </div>
 
@@ -1780,8 +1816,8 @@ export default function ExecutionPage() {
                   ));
                 }
               });
-            })() : ec2Logs.length > 0 ? (
-              // Show EC2 live logs as primary fallback
+            })() : ec2Logs.length > 0 && strategyDeployed ? (
+              // Show EC2 live logs only when strategy is deployed
               ec2Logs.map((log, idx) => (
                 <div key={idx} className={`mb-1 text-xs ${
                   log.level === 'SUCCESS' ? 'text-green-400' :

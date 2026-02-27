@@ -20,7 +20,7 @@ test_config = {
     ],
     "portfolio_value": 10000,
     "deployment_id": "test_v6_strategy",
-    "lookback_period": 180,
+    "lookback_period": 5,
     "entry_z_score": 1.0,
     "exit_z_score": 0.2,
     "stop_loss_z_score": 3.5,
